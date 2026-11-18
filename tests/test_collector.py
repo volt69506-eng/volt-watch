@@ -52,8 +52,45 @@ def test_ufw_rules_are_parsed(monkeypatch):
     rules = collector.ufw_rules()
 
     assert rules == [
-        {"port": "22/tcp", "action": "ALLOW", "interface": "tailscale0", "source": "Anywhere"},
-        {"port": "22/tcp", "action": "DENY", "interface": "", "source": "Anywhere"},
+        {"port": "22/tcp", "action": "ALLOW", "interface": "tailscale0", "source": "Anywhere", "address": ""},
+        {"port": "22/tcp", "action": "DENY", "interface": "", "source": "Anywhere", "address": ""},
+    ]
+
+
+def test_ufw_rules_with_address_in_target(monkeypatch):
+    # ufw may print the To column as "<address> <port>" separated by a space.
+    text = (
+        "Status: active\n"
+        "Default: deny (incoming)\n"
+        "\n"
+        "To                         Action      From\n"
+        "--                         ------      ----\n"
+        "172.17.0.1 53/udp          ALLOW IN    172.16.0.0/12   # allow-docker-dns\n"
+        "192.168.1.5 8080/tcp       REJECT IN   Anywhere\n"
+        "22/tcp                     ALLOW IN    Anywhere\n"
+        "22/tcp on tailscale0       ALLOW IN    Anywhere\n"
+    )
+    _run(monkeypatch, {("ufw", "status", "verbose"): _Result(text)})
+
+    rules = collector.ufw_rules()
+
+    assert rules == [
+        {
+            "port": "53/udp",
+            "action": "ALLOW",
+            "interface": "",
+            "source": "172.16.0.0/12",
+            "address": "172.17.0.1",
+        },
+        {
+            "port": "8080/tcp",
+            "action": "REJECT",
+            "interface": "",
+            "source": "Anywhere",
+            "address": "192.168.1.5",
+        },
+        {"port": "22/tcp", "action": "ALLOW", "interface": "", "source": "Anywhere", "address": ""},
+        {"port": "22/tcp", "action": "ALLOW", "interface": "tailscale0", "source": "Anywhere", "address": ""},
     ]
 
 

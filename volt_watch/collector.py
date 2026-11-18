@@ -7,7 +7,13 @@ Mac-specific register does not exist.
 """
 
 import json
+import re
 import subprocess
+
+# ufw rule rows have a fixed Action column, but the To column before it may be
+# one token ("22/tcp") or two ("172.17.0.1 53/udp"). Anchor on the action.
+_ACTIONS = {"ALLOW", "DENY", "REJECT", "LIMIT"}
+_PORT_RE = re.compile(r"\d+/[a-z]+")
 
 # The volatile register and device path for Intel Mac mini power restore.
 LPC_ADDRESS = "00:1f.0"
@@ -56,35 +62,50 @@ def ufw_rules() -> list:
         if line.lstrip().startswith("--"):
             continue
 
-        # The row is "<port> [on <iface>] <ACTION> [IN] <source>". Split the
-        # whole line into columns and read them positionally: the interface
-        # qualifier, when present, occupies the second column.
-        columns = line.split()
-        if len(columns) < 2:
+        # Split on the action token: everything before it is the To column
+        # (a port, optionally preceded by an address), everything after is
+        # the direction and From column. Trailing "# ..." is a user comment.
+        columns = line.split("#", 1)[0].split()
+        action_index = next(
+            (i for i, token in enumerate(columns) if token in _ACTIONS),
+            None,
+        )
+        if action_index is None or action_index == 0:
             continue
 
-        port = columns[0]
-        index = 1
-        interface = ""
-        if columns[index] == "on" and len(columns) > index + 1:
-            interface = columns[index + 1]
-            index += 2
+        action = columns[action_index]
+        target = columns[:action_index]
+        rest = columns[action_index + 1:]
 
-        action = columns[index] if len(columns) > index else ""
-        source = " ".join(columns[index + 1:]) if len(columns) > index + 1 else ""
         # ufw writes the direction as its own column ("ALLOW IN"); it is not
         # part of the source.
-        if source.startswith("IN "):
-            source = source[3:]
-        elif source == "IN":
-            source = ""
+        if rest and rest[0] in ("IN", "OUT"):
+            rest = rest[1:]
+        source = " ".join(rest).strip()
+
+        # The interface qualifier ("on <iface>") may follow the port.
+        interface = ""
+        if len(target) >= 2 and target[-2] == "on":
+            interface = target[-1]
+            target = target[:-2]
+
+        # The port is the "<num>/<proto>" token; any leading token is an
+        # address ufw printed alongside it in the To column.
+        port = ""
+        address = ""
+        for token in target:
+            if _PORT_RE.fullmatch(token):
+                port = token
+            else:
+                address = token
 
         rules.append(
             {
                 "port": port,
                 "action": action,
                 "interface": interface,
-                "source": source.strip(),
+                "source": source,
+                "address": address,
             }
         )
     return rules
