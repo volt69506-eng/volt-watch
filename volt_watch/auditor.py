@@ -1,7 +1,13 @@
 """Run every check against the live host and collect the findings."""
 
 from . import collector
-from .checks import power_restore_check, ssh_exposure_check, sshd_config_check, tailscale_check
+from .checks import (
+    power_restore_check,
+    ssh_exposure_check,
+    sshd_config_check,
+    tailscale_exposure_check,
+    tailscale_check,
+)
 
 
 def audit() -> list:
@@ -16,6 +22,8 @@ def audit() -> list:
     status = collector.tailscale_status()
     if status is not None:
         findings.extend(tailscale_check(status))
+
+    findings.extend(tailscale_exposure_check(collector.tailscale_services()))
 
     findings.extend(
         ssh_exposure_check(collector.ufw_rules(), collector.ufw_default_incoming())

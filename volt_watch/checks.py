@@ -132,6 +132,51 @@ def ssh_exposure_check(rules: list | None, default_incoming: str | None = "deny"
     return findings
 
 
+def tailscale_exposure_check(services: list) -> list:
+    """Report a local service published beyond the tailnet.
+
+    ``services`` comes from :func:`collector.tailscale_services`: one dict per
+    published port with ``service``, ``port`` and ``target``. A funnel to the
+    internet bypasses the host firewall entirely, which makes it the same class
+    of problem as ``sshd.exposed`` one layer up.
+    """
+    findings = []
+
+    for service in services:
+        if service.get("target") != "internet":
+            continue
+        port = service.get("port", "?")
+        findings.append(
+            Finding(
+                check="tailscale.exposed",
+                severity=Severity.CRITICAL,
+                message=(
+                    f"Port {port} is published to the internet with tailscale funnel, "
+                    "bypassing the host firewall"
+                ),
+                remedy="Remove the funnel (`tailscale funnel off`) or replace it with `tailscale serve`.",
+                evidence={"service": service.get("service"), "port": port},
+            )
+        )
+
+    for service in services:
+        if service.get("target") != "tailnet":
+            continue
+        findings.append(
+            Finding(
+                check="tailscale.published",
+                severity=Severity.INFO,
+                message=(
+                    f"Port {service.get('port', '?')} is published to the tailnet with tailscale serve"
+                ),
+                remedy="",
+                evidence={"service": service.get("service"), "port": service.get("port")},
+            )
+        )
+
+    return findings
+
+
 def sshd_config_check(config: dict | None) -> list:
     """Report an sshd configuration that accepts weak authentication.
 

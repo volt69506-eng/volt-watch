@@ -216,6 +216,65 @@ def sshd_config() -> dict | None:
     return _parse_sshd_config(text) | {"source": "files"}
 
 
+def tailscale_services() -> list:
+    """List what this node publishes with ``tailscale serve`` and ``funnel``.
+
+    ``tailscale status --json`` carries no serve or funnel state: a node can be
+    ``Running`` and still be funneling a port to the internet. The serve command
+    prints its own configuration, and ``AllowFunnel`` is the flag that says
+    whether a port is published beyond the tailnet.
+
+    Returns one dict per published port: ``service`` (``funnel`` or ``serve``),
+    ``port`` and ``target`` (``internet`` or ``tailnet``). Empty when nothing is
+    published, and empty when the tool is missing — an absent tool is a normal
+    host, not an error.
+    """
+    try:
+        done = _run(["tailscale", "serve", "status", "--json"])
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if done.returncode != 0:
+        return []
+    try:
+        config = json.loads(done.stdout)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(config, dict):
+        return []
+
+    funnel_ports = set()
+    for key, enabled in (config.get("AllowFunnel") or {}).items():
+        if enabled:
+            funnel_ports.add(_port_of(str(key)))
+
+    services = []
+    for port, handler in (config.get("TCP") or {}).items():
+        if not isinstance(handler, dict):
+            continue
+        services.append(_service(str(port), funnel_ports))
+
+    for host_port in (config.get("Web") or {}):
+        services.append(_service(str(host_port), funnel_ports))
+
+    return services
+
+
+def _port_of(host_port: str) -> str:
+    """Take the port out of a ``host:port`` key, tolerating a bare port."""
+    return host_port.rsplit(":", 1)[-1]
+
+
+def _service(key: str, funnel_ports: set) -> dict:
+    """Build one published-service record, deciding funnel from its port."""
+    published = _port_of(key)
+    is_funnel = published in funnel_ports
+    return {
+        "service": "funnel" if is_funnel else "serve",
+        "port": published,
+        "target": "internet" if is_funnel else "tailnet",
+    }
+
+
 def power_restore_state() -> dict:
     """Read the power-restore register and the boot unit that rewrites it."""
     state = {"present": False, "register": None, "unit_enabled": None}
