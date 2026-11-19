@@ -37,8 +37,10 @@ Each of these is invisible from the desktop and obvious in hindsight.
 pip install volt-watch          # or: pipx install volt-watch
 ```
 
-Needs Python 3.10+. Reads `tailscale`, `ufw`, `setpci` and `systemctl` from the
-host; a missing tool is treated as "not applicable" rather than as an error.
+Needs Python 3.10+. Reads `tailscale`, `ufw`, `sshd`, `setpci` and `systemctl`
+from the host. The audit reports missing tools, timeouts and failed commands
+in one `auditor.degraded` warning. JSON reports include the reader names and
+reasons under `evidence.failed_readers`, and `--quiet` still exits with status 1.
 
 ## Usage
 
@@ -57,6 +59,7 @@ monitoring check.
 
 | Check | Severity | Meaning |
 |---|---|---|
+| `auditor.degraded` | warning | One or more readers could not complete their checks |
 | `sshd.exposed` | critical | Port 22 is allowed on every interface, including the public one |
 | `sshd.unrestricted` | warning | Nothing restricts port 22 and the firewall default allows incoming |
 | `sshd.firewall_unreadable` | warning | The firewall could not be read, so SSH exposure is unknown |

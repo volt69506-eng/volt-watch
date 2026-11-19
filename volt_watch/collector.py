@@ -1,9 +1,7 @@
 """Reading real host state.
 
-Every reader is a thin wrapper over one command and returns plain data, or
-``None`` when the thing it asked about is not there. A missing tool is a normal
-answer, not an exception: the auditor runs on hosts where Tailscale or the
-Mac-specific register does not exist.
+Readers return plain data or their existing empty values. Command failures are
+also recorded separately so the audit can report what it could not inspect.
 """
 
 import glob
@@ -11,6 +9,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from threading import local
 
 # ufw rule rows have a fixed Action column, but the To column before it may be
 # one token ("22/tcp") or two ("172.17.0.1 53/udp"). Anchor on the action.
@@ -23,21 +22,51 @@ LPC_REGISTER = "0xa4.b"
 POWER_UNIT = "mac-mini-power-restore.service"
 
 
-def _run(cmd: list) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+class _ReaderState(local):
+    def __init__(self):
+        self.errors: dict[str, str] = {}
+
+
+_reader_state = _ReaderState()
+
+
+def collector_errors() -> dict[str, str]:
+    """Return a snapshot of failed readers for the current thread."""
+    return _reader_state.errors.copy()
+
+
+def reset_collector_errors() -> None:
+    """Begin a new collection without carrying over earlier failures."""
+    _reader_state.errors.clear()
+
+
+def _run(reader: str, cmd: list[str]) -> subprocess.CompletedProcess[str] | None:
+    errors = _reader_state.errors
+    errors.pop(reader, None)
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        errors[reader] = "timed out"
+    except OSError:
+        errors[reader] = "not installed"
+    except subprocess.SubprocessError:
+        errors[reader] = "command failed"
+    else:
+        if done.returncode:
+            errors[reader] = f"exit {done.returncode}"
+        return done
+    return None
 
 
 def tailscale_status() -> dict | None:
     """Return the parsed ``tailscale status --json`` payload, or None."""
-    try:
-        done = _run(["tailscale", "status", "--json"])
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0:
+    done = _run("tailscale_status", ["tailscale", "status", "--json"])
+    if done is None or done.returncode != 0:
         return None
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError:
+        _reader_state.errors["tailscale_status"] = "invalid JSON"
         return None
 
 
@@ -50,11 +79,8 @@ def ufw_rules() -> list | None:
     answered and there were no rules. The two must not share a representation:
     a check that cannot read its input has not passed.
     """
-    try:
-        done = _run(["ufw", "status", "verbose"])
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0:
+    done = _run("ufw_rules", ["ufw", "status", "verbose"])
+    if done is None or done.returncode != 0:
         return None
 
     rules = []
@@ -127,11 +153,8 @@ def ufw_default_incoming() -> str | None:
     failed read would report the safe-looking answer for a firewall that was
     never inspected.
     """
-    try:
-        done = _run(["ufw", "status", "verbose"])
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0:
+    done = _run("ufw_default_incoming", ["ufw", "status", "verbose"])
+    if done is None or done.returncode != 0:
         return None
 
     for line in done.stdout.splitlines():
@@ -203,16 +226,14 @@ def sshd_config() -> dict | None:
     root (it loads the host keys), so an unprivileged run falls back to reading
     the files, and the dict says which route produced it.
     """
-    try:
-        done = _run(["sshd", "-T"])
-    except (OSError, subprocess.SubprocessError):
-        done = None
+    done = _run("sshd_config", ["sshd", "-T"])
     if done is not None and done.returncode == 0:
         return _parse_sshd_config(done.stdout) | {"source": "sshd -T"}
 
     text = _read_sshd_files()
     if not text.strip():
         return None
+    _reader_state.errors.pop("sshd_config", None)
     return _parse_sshd_config(text) | {"source": "files"}
 
 
@@ -226,18 +247,16 @@ def tailscale_services() -> list:
 
     Returns one dict per published port: ``service`` (``funnel`` or ``serve``),
     ``port`` and ``target`` (``internet`` or ``tailnet``). Empty when nothing is
-    published, and empty when the tool is missing — an absent tool is a normal
-    host, not an error.
+    published. Command failures also return an empty list and appear in
+    ``collector_errors()``.
     """
-    try:
-        done = _run(["tailscale", "serve", "status", "--json"])
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if done.returncode != 0:
+    done = _run("tailscale_services", ["tailscale", "serve", "status", "--json"])
+    if done is None or done.returncode != 0:
         return []
     try:
         config = json.loads(done.stdout)
     except json.JSONDecodeError:
+        _reader_state.errors["tailscale_services"] = "invalid JSON"
         return []
     if not isinstance(config, dict):
         return []
@@ -279,9 +298,8 @@ def power_restore_state() -> dict:
     """Read the power-restore register and the boot unit that rewrites it."""
     state = {"present": False, "register": None, "unit_enabled": None}
 
-    try:
-        done = _run(["setpci", "-s", LPC_ADDRESS, LPC_REGISTER])
-    except (OSError, subprocess.SubprocessError):
+    done = _run("power_restore_state", ["setpci", "-s", LPC_ADDRESS, LPC_REGISTER])
+    if done is None:
         return state
 
     if done.returncode == 0 and done.stdout.strip():
@@ -297,10 +315,11 @@ def power_restore_state() -> dict:
 
 def unit_enabled(name: str) -> bool | None:
     """Return whether a systemd unit is enabled, or None if systemctl fails."""
-    try:
-        done = _run(["systemctl", "is-enabled", name])
-    except (OSError, subprocess.SubprocessError):
+    done = _run("unit_enabled", ["systemctl", "is-enabled", name])
+    if done is None:
         return None
     if done.returncode != 0:
+        if done.returncode == 1 and done.stdout.strip() in {"disabled", "masked", "masked-runtime"}:
+            _reader_state.errors.pop("unit_enabled", None)
         return False
     return done.stdout.strip() == "enabled"
