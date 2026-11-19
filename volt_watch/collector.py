@@ -39,14 +39,21 @@ def tailscale_status() -> dict | None:
         return None
 
 
-def ufw_rules() -> list:
-    """Parse ``ufw status verbose`` into rule dicts."""
+def ufw_rules() -> list | None:
+    """Parse ``ufw status verbose`` into rule dicts.
+
+    Returns ``None`` when the firewall could not be read at all — the tool is
+    missing, or it failed (on Arch/Omarchy ``ufw`` is a root-only wrapper that
+    exits non-zero for an unprivileged caller). An empty list means the command
+    answered and there were no rules. The two must not share a representation:
+    a check that cannot read its input has not passed.
+    """
     try:
         done = _run(["ufw", "status", "verbose"])
     except (OSError, subprocess.SubprocessError):
-        return []
+        return None
     if done.returncode != 0:
-        return []
+        return None
 
     rules = []
     in_table = False
@@ -111,21 +118,29 @@ def ufw_rules() -> list:
     return rules
 
 
-def ufw_default_incoming() -> str:
-    """Return the firewall's default incoming policy: ``allow`` or ``deny``."""
+def ufw_default_incoming() -> str | None:
+    """Return the firewall's default incoming policy: ``allow`` or ``deny``.
+
+    Returns ``None`` when it could not be read. Falling back to ``"deny"`` on a
+    failed read would report the safe-looking answer for a firewall that was
+    never inspected.
+    """
     try:
         done = _run(["ufw", "status", "verbose"])
     except (OSError, subprocess.SubprocessError):
-        return "deny"
+        return None
     if done.returncode != 0:
-        return "deny"
+        return None
 
     for line in done.stdout.splitlines():
         if line.startswith("Default:"):
-            match = line.split("incoming)", 1)
-            policy = match[0].rsplit(":", 1)[-1].strip()
-            return policy if policy in ("allow", "deny") else "deny"
-    return "deny"
+            # The line lists both directions: "Default: deny (incoming), allow
+            # (outgoing)". Read the incoming clause specifically, rather than
+            # splitting on the first ")" — which lands inside the clause when
+            # both are present.
+            match = re.search(r"(\w+)\s*\(incoming\)", line)
+            return match.group(1) if match and match.group(1) in ("allow", "deny") else None
+    return None
 
 
 def power_restore_state() -> dict:

@@ -66,19 +66,39 @@ def _is_private_source(source: str) -> bool:
     return not addr.is_global
 
 
-def ssh_exposure_check(rules: list, default_incoming: str = "deny") -> list:
+def ssh_exposure_check(rules: list | None, default_incoming: str | None = "deny") -> list:
     """Report SSH reachable from anything other than the tailnet.
 
     ``rules`` is a list of parsed firewall rules. Each rule is a dict with
     ``port``, ``action`` and ``interface`` keys; an empty ``interface`` means
     the rule applies to every interface, which is what makes SSH exposed.
 
-    ``default_incoming`` is the firewall's default policy for incoming
-    traffic. When it is ``allow`` and nothing restricts port 22, SSH is
-    exposed by omission; when it is ``deny``, an unmentioned port is closed
-    and there is nothing to report.
+    ``rules`` is ``None`` when the firewall could not be read — the tool is
+    missing, or it failed, which on Arch/Omarchy is every unprivileged run.
+    That is reported rather than treated as "no rules": a check that could not
+    read its input has not passed.
+
+    ``default_incoming`` is the firewall's default policy for incoming traffic.
+    When it is ``allow`` and nothing restricts port 22, SSH is exposed by
+    omission; when it is ``deny``, an unmentioned port is closed and there is
+    nothing to report. ``None`` means the policy could not be read either.
     """
     findings = []
+
+    if rules is None or default_incoming is None:
+        findings.append(
+            Finding(
+                check="sshd.firewall_unreadable",
+                severity=Severity.WARNING,
+                message="The firewall state could not be read, so SSH exposure is unknown",
+                remedy=(
+                    "Run as root, or allow `ufw status verbose` through polkit. "
+                    "See the privileges table in the README."
+                ),
+                evidence={"rules": rules, "default_incoming": default_incoming},
+            )
+        )
+        return findings
 
     ssh_rules = [r for r in rules if str(r.get("port", "")).startswith("22")]
 
