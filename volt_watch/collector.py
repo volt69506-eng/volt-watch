@@ -6,9 +6,11 @@ answer, not an exception: the auditor runs on hosts where Tailscale or the
 Mac-specific register does not exist.
 """
 
+import glob
 import json
 import re
 import subprocess
+from pathlib import Path
 
 # ufw rule rows have a fixed Action column, but the To column before it may be
 # one token ("22/tcp") or two ("172.17.0.1 53/udp"). Anchor on the action.
@@ -141,6 +143,77 @@ def ufw_default_incoming() -> str | None:
             match = re.search(r"(\w+)\s*\(incoming\)", line)
             return match.group(1) if match and match.group(1) in ("allow", "deny") else None
     return None
+
+
+def _read_sshd_files() -> str:
+    """Read the effective sshd configuration by hand: the main file, then drop-ins.
+
+    ``sshd`` applies the last value it sees, so the drop-ins come after the main
+    file and later files in the glob win. Used when ``sshd -T`` cannot run.
+    """
+    parts = []
+    for path in ["/etc/ssh/sshd_config", *sorted(glob.glob("/etc/ssh/sshd_config.d/*.conf"))]:
+        try:
+            parts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    return "\n".join(parts)
+
+
+def _parse_sshd_config(text: str) -> dict:
+    """Pull the two authentication settings out of sshd configuration text.
+
+    ``permitrootlogin`` accepts several values; only ``yes`` means root may sign
+    in with a password, so ``prohibit-password`` and ``forced-commands-only``
+    are not root login.
+    """
+    wanted = {"passwordauthentication": "password_authentication", "permitrootlogin": "permit_root_login"}
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        key = parts[0].lower()
+        if key in wanted and key not in values:
+            values[key] = parts[1].strip().lower()
+
+    def _bool(value: str | None) -> bool | None:
+        if value is None:
+            return None
+        if value in ("yes", "true", "1"):
+            return True
+        if value in ("no", "false", "0", "prohibit-password", "without-password", "forced-commands-only"):
+            return False
+        return None
+
+    return {
+        "password_authentication": _bool(values.get("passwordauthentication")),
+        "permit_root_login": _bool(values.get("permitrootlogin")),
+    }
+
+
+def sshd_config() -> dict | None:
+    """Read sshd's effective configuration, or ``None`` if neither route works.
+
+    ``sshd -T`` prints the effective configuration, which is the only correct
+    answer — it applies ``Match`` blocks and the drop-in precedence. It needs
+    root (it loads the host keys), so an unprivileged run falls back to reading
+    the files, and the dict says which route produced it.
+    """
+    try:
+        done = _run(["sshd", "-T"])
+    except (OSError, subprocess.SubprocessError):
+        done = None
+    if done is not None and done.returncode == 0:
+        return _parse_sshd_config(done.stdout) | {"source": "sshd -T"}
+
+    text = _read_sshd_files()
+    if not text.strip():
+        return None
+    return _parse_sshd_config(text) | {"source": "files"}
 
 
 def power_restore_state() -> dict:

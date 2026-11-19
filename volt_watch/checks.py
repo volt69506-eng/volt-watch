@@ -132,6 +132,44 @@ def ssh_exposure_check(rules: list | None, default_incoming: str | None = "deny"
     return findings
 
 
+def sshd_config_check(config: dict | None) -> list:
+    """Report an sshd configuration that accepts weak authentication.
+
+    ``config`` carries the effective values read by :func:`collector.sshd_config`.
+    ``None`` for either setting means it could not be read, and an unknown value
+    is not a finding: this check reports what the daemon would accept, not what
+    the auditor failed to see.
+    """
+    if config is None:
+        return []
+
+    findings = []
+
+    if config.get("permit_root_login") is True:
+        findings.append(
+            Finding(
+                check="sshd.root_login",
+                severity=Severity.CRITICAL,
+                message="sshd accepts a root login",
+                remedy="Set `PermitRootLogin no` (or `prohibit-password`) in /etc/ssh/sshd_config.",
+                evidence={"permit_root_login": True},
+            )
+        )
+
+    if config.get("password_authentication") is True:
+        findings.append(
+            Finding(
+                check="sshd.password_auth",
+                severity=Severity.WARNING,
+                message="sshd accepts password authentication",
+                remedy="Set `PasswordAuthentication no` and rely on keys, which is the point of a tailnet-only host.",
+                evidence={"password_authentication": True},
+            )
+        )
+
+    return findings
+
+
 def power_restore_check(state: dict) -> list:
     """Report a machine that would stay dark after a power cut.
 
