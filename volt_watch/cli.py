@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-from .auditor import audit
+from .auditor import audit, check_prefixes
 
 # The exit code a finding severity contributes to.
 _EXIT_BY_SEVERITY = {"critical": 1, "warning": 1, "info": 0}
@@ -43,6 +43,11 @@ def _parse_args(argv):
         "--since",
         metavar="FILE",
         help="compare against a previous --output report and exit non-zero only for new or worsened findings",
+    )
+    parser.add_argument(
+        "--check",
+        metavar="PREFIX",
+        help="run only the checks whose name starts with PREFIX, e.g. --check power",
     )
     return parser.parse_args(argv)
 
@@ -102,8 +107,17 @@ def main(argv=None, findings=None) -> int:
     """
     args = _parse_args(argv if argv is not None else sys.argv[1:])
 
+    if args.check and not any(p.startswith(args.check) for p in check_prefixes()):
+        available = ", ".join(check_prefixes())
+        message = f"unknown check prefix {args.check!r}; available: {available}"
+        if args.json:
+            print(json.dumps({"findings": [], "counts": {"total": 0, "critical": 0, "warning": 0, "info": 0}, "error": message}, indent=2))
+        elif not args.quiet:
+            print(f"volt-watch: error: {message}", file=sys.stderr)
+        return 2
+
     if findings is None:
-        findings = [f.as_dict() for f in audit()]
+        findings = [f.as_dict() for f in audit(only=args.check)]
 
     baseline = _read_baseline(args.since) if args.since else None
     if args.since and baseline is None:
