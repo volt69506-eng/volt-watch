@@ -132,6 +132,31 @@ def ssh_exposure_check(rules: list | None, default_incoming: str | None = "deny"
     return findings
 
 
+def auditor_degraded_check(errors: dict) -> list:
+    """Report readers that could not run.
+
+    ``errors`` comes from :func:`collector.collector_errors`. An empty map means
+    every reader answered and the report can be trusted. A non-empty one means
+    the audit saw less than it should, and the findings it did produce are
+    incomplete — so that has to be visible rather than folded into silence.
+    """
+    if not errors:
+        return []
+
+    return [
+        Finding(
+            check="auditor.degraded",
+            severity=Severity.WARNING,
+            message=(
+                f"{len(errors)} reader(s) could not run, so this report is incomplete: "
+                + ", ".join(sorted(errors))
+            ),
+            remedy="Install the missing tools, or run the auditor as root where a reader needs it.",
+            evidence={"readers": dict(errors)},
+        )
+    ]
+
+
 def tailscale_exposure_check(services: list) -> list:
     """Report a local service published beyond the tailnet.
 

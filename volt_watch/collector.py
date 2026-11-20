@@ -23,17 +23,55 @@ LPC_REGISTER = "0xa4.b"
 POWER_UNIT = "mac-mini-power-restore.service"
 
 
-def _run(cmd: list) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+# Readers record why they could not run, so the audit can say "I could not
+# tell" instead of reading an empty answer as a clean one. The map is drained
+# by collector_errors().
+_ERRORS: dict[str, str] = {}
+
+
+def _record_error(name: str, reason: str) -> None:
+    _ERRORS[name] = reason
+
+
+def collector_errors() -> dict:
+    """Map reader name to the reason it could not run, and clear it.
+
+    A reader that answered is absent from the map; a reader that raised
+    ``FileNotFoundError`` is ``"not installed"``, a timeout is ``"timed out"``,
+    and a command that answered non-zero is ``"exit <code>"``.
+    """
+    errors = dict(_ERRORS)
+    _ERRORS.clear()
+    return errors
+
+
+def _run(cmd: list, name: str | None = None) -> subprocess.CompletedProcess:
+    """Run a reader's command, recording why it failed when it has a name.
+
+    Readers that already have a finding of their own (the firewall pair reports
+    ``sshd.firewall_unreadable``) pass no name, so a single failure is reported
+    once rather than twice.
+    """
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        if name:
+            _record_error(name, "not installed")
+        raise
+    except subprocess.TimeoutExpired:
+        if name:
+            _record_error(name, "timed out")
+        raise
 
 
 def tailscale_status() -> dict | None:
     """Return the parsed ``tailscale status --json`` payload, or None."""
     try:
-        done = _run(["tailscale", "status", "--json"])
+        done = _run(["tailscale", "status", "--json"], "tailscale_status")
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode != 0:
+        _record_error("tailscale_status", f"exit {done.returncode}")
         return None
     try:
         return json.loads(done.stdout)
@@ -204,7 +242,7 @@ def sshd_config() -> dict | None:
     the files, and the dict says which route produced it.
     """
     try:
-        done = _run(["sshd", "-T"])
+        done = _run(["sshd", "-T"], "sshd_config")
     except (OSError, subprocess.SubprocessError):
         done = None
     if done is not None and done.returncode == 0:
@@ -230,10 +268,11 @@ def tailscale_services() -> list:
     host, not an error.
     """
     try:
-        done = _run(["tailscale", "serve", "status", "--json"])
+        done = _run(["tailscale", "serve", "status", "--json"], "tailscale_services")
     except (OSError, subprocess.SubprocessError):
         return []
     if done.returncode != 0:
+        _record_error("tailscale_services", f"exit {done.returncode}")
         return []
     try:
         config = json.loads(done.stdout)

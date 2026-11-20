@@ -2,6 +2,7 @@
 
 from . import collector
 from .checks import (
+    auditor_degraded_check,
     power_restore_check,
     ssh_exposure_check,
     sshd_config_check,
@@ -32,6 +33,8 @@ def audit() -> list:
     findings.extend(sshd_config_check(collector.sshd_config()))
 
     findings.extend(power_restore_check(collector.power_restore_state()))
+
+    findings.extend(auditor_degraded_check(collector.collector_errors()))
 
     severity_order = {"critical": 0, "warning": 1, "info": 2}
     findings.sort(key=lambda f: severity_order[f.severity.value])
