@@ -7,6 +7,7 @@ the auditor itself failing. ``info`` findings never change the exit code.
 
 import argparse
 import json
+import platform
 import sys
 from pathlib import Path
 
@@ -17,6 +18,9 @@ _EXIT_BY_SEVERITY = {"critical": 1, "warning": 1, "info": 0}
 
 # Lower is worse; a rise means the finding got more severe.
 _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
+
+# Bump when the report shape changes in a way a consumer must know about.
+REPORT_VERSION = 1
 
 
 def _parse_args(argv):
@@ -131,7 +135,12 @@ def main(argv=None, findings=None) -> int:
             }
         ]
 
-    payload = {"findings": findings, "counts": _counts(findings)}
+    payload = {
+        "version": REPORT_VERSION,
+        "host": platform.node(),
+        "findings": findings,
+        "counts": _counts(findings),
+    }
 
     if args.json:
         print(json.dumps(payload, indent=2))

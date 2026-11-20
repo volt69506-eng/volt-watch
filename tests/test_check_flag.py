@@ -6,6 +6,8 @@ positive on a remote host — is wasteful and noisy.
 
 import json
 
+import pytest
+
 
 from volt_watch import auditor, cli
 
@@ -96,12 +98,9 @@ def test_the_exit_code_comes_from_the_checks_that_ran(monkeypatch):
     assert any(f.severity.value == "critical" for f in findings)
 
 
-def test_help_documents_the_flag():
-    import subprocess
+def test_help_documents_the_flag(capsys):
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--help"])
 
-    out = subprocess.run(
-        ["python3", "-m", "volt_watch.cli", "--help"],
-        capture_output=True,
-        text=True,
-    )
-    assert "--check" in out.stdout
+    assert raised.value.code == 0
+    assert "--check" in capsys.readouterr().out
