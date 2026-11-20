@@ -303,5 +303,18 @@ def power_restore_check(state: dict) -> list:
                 evidence={"unit_enabled": False},
             )
         )
+    elif state.get("unit_enabled") is True and state.get("unit_active") is False:
+        findings.append(
+            Finding(
+                check="power.unit_failed",
+                severity=Severity.CRITICAL,
+                message="The boot unit that restores auto power-on is enabled but did not run successfully",
+                remedy=(
+                    "Check `systemctl status mac-mini-power-restore.service` and its journal: "
+                    "a failed ConditionPathExists or a setpci error leaves the register unwritten."
+                ),
+                evidence={"unit_enabled": True, "unit_active": False},
+            )
+        )
 
     return findings

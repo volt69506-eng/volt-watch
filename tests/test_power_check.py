@@ -32,6 +32,42 @@ def test_reports_when_the_boot_unit_is_not_enabled():
     assert findings[0].severity.value == "warning"
 
 
+def test_enabled_and_active_means_no_finding():
+    findings = power_restore_check(
+        {"register": 0x08, "present": True, "unit_enabled": True, "unit_active": True}
+    )
+
+    assert findings == []
+
+
+def test_an_enabled_unit_that_did_not_run_is_critical():
+    """Enabled is not effective: a bad ConditionPathExists or a setpci error
+    leaves the unit enabled and the register unwritten."""
+    findings = power_restore_check(
+        {"register": 0x08, "present": True, "unit_enabled": True, "unit_active": False}
+    )
+
+    assert [f.check for f in findings] == ["power.unit_failed"]
+    assert findings[0].severity.value == "critical"
+
+
+def test_an_unknown_active_state_is_not_a_finding():
+    findings = power_restore_check(
+        {"register": 0x08, "present": True, "unit_enabled": True, "unit_active": None}
+    )
+
+    assert findings == []
+
+
+def test_a_disabled_unit_is_reported_as_disabled_not_failed():
+    """Not enabled is the older finding, and it wins: there is nothing to run."""
+    findings = power_restore_check(
+        {"register": 0x08, "present": True, "unit_enabled": False, "unit_active": False}
+    )
+
+    assert [f.check for f in findings] == ["power.unit_disabled"]
+
+
 def test_a_failed_read_is_not_reported_as_a_disabled_register():
     """setpci prints 0xff when it cannot open the device.
 

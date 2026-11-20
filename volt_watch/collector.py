@@ -316,7 +316,7 @@ def _service(key: str, funnel_ports: set) -> dict:
 
 def power_restore_state() -> dict:
     """Read the power-restore register and the boot unit that rewrites it."""
-    state = {"present": False, "register": None, "unit_enabled": None}
+    state = {"present": False, "register": None, "unit_enabled": None, "unit_active": None}
 
     try:
         done = _run(["setpci", "-s", LPC_ADDRESS, LPC_REGISTER])
@@ -331,6 +331,7 @@ def power_restore_state() -> dict:
             state["register"] = None
 
     state["unit_enabled"] = unit_enabled(POWER_UNIT)
+    state["unit_active"] = unit_active(POWER_UNIT)
     return state
 
 
@@ -343,3 +344,19 @@ def unit_enabled(name: str) -> bool | None:
     if done.returncode != 0:
         return False
     return done.stdout.strip() == "enabled"
+
+
+def unit_active(name: str) -> bool | None:
+    """Return whether a systemd unit's last run succeeded, or None if systemctl fails.
+
+    ``is-active`` answers a different question from ``is-enabled``: a unit can be
+    enabled and still have failed on the last boot. For a oneshot that writes a
+    volatile register, that difference is the whole point.
+    """
+    try:
+        done = _run(["systemctl", "is-active", name])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return False
+    return done.stdout.strip() == "active"
