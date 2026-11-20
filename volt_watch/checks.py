@@ -132,6 +132,36 @@ def ssh_exposure_check(rules: list | None, default_incoming: str | None = "deny"
     return findings
 
 
+def pending_updates_check(count: int | None) -> list:
+    """Report a host with pending package updates.
+
+    ``None`` means the auditor could not determine the answer — no package
+    manager it knows, or the command failed. Unknown is not a finding.
+
+    The thresholds are a starting point: 1–20 is routine, 21–100 is falling
+    behind, over 100 suggests the host is not being maintained at all.
+    """
+    if count is None or count == 0:
+        return []
+
+    if count > 100:
+        severity = Severity.CRITICAL
+    elif count > 20:
+        severity = Severity.WARNING
+    else:
+        severity = Severity.INFO
+
+    return [
+        Finding(
+            check="packages.outdated",
+            severity=severity,
+            message=f"{count} package update(s) are pending",
+            remedy="Review and apply pending updates (`pacman -Syu` on Arch).",
+            evidence={"pending": count},
+        )
+    ]
+
+
 def clock_check(state: dict) -> list:
     """Report a host whose clock is not being synchronised.
 

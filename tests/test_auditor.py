@@ -10,6 +10,7 @@ _READER_DEFAULTS = {
     "tailscale_services": list,
     "sshd_config": lambda: None,
     "clock_state": lambda: {"synchronised": True, "service_active": True},
+    "pending_update_count": lambda: 0,
 }
 
 

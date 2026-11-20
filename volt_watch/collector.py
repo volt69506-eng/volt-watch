@@ -365,6 +365,29 @@ def clock_state() -> dict:
     return state
 
 
+def pending_update_count() -> int | None:
+    """Count pending package updates, or None when there is no supported manager.
+
+    ``checkupdates`` (pacman/Arch) is present on the target host and prints one
+    line per update. Its output is suppressed when the local metadata is stale,
+    so the count can be 0 for "no updates" and 0 for "never refreshed" — the
+    auditor does not try to tell those apart, and a refresh is cheap.
+
+    ``None`` means the answer is unknown: no manager, or the command failed.
+    That is not a finding.
+
+    ``checkupdates`` exits 2 when there ARE updates, 0 when there are none and 1
+    on error, so only 1 (or anything unexpected) is a failure.
+    """
+    try:
+        done = _run(["checkupdates"], "pending_update_count")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode not in (0, 2):
+        return None
+    return len([line for line in done.stdout.splitlines() if line.strip()])
+
+
 def unit_enabled(name: str) -> bool | None:
     """Return whether a systemd unit is enabled, or None if systemctl fails."""
     try:
