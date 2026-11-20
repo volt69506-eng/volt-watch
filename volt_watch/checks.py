@@ -132,6 +132,29 @@ def ssh_exposure_check(rules: list | None, default_incoming: str | None = "deny"
     return findings
 
 
+def clock_check(state: dict) -> list:
+    """Report a host whose clock is not being synchronised.
+
+    ``state`` comes from :func:`collector.clock_state`. ``None`` means it could
+    not be read, and unknown is not a finding: a host with no timedatectl is
+    not a host with a broken clock.
+    """
+    if state.get("synchronised") is False or state.get("service_active") is False:
+        return [
+            Finding(
+                check="time.unsynchronised",
+                severity=Severity.WARNING,
+                message="The host's clock is not being synchronised",
+                remedy="Enable systemd-timesyncd (`systemctl enable --now systemd-timesyncd`).",
+                evidence={
+                    "synchronised": state.get("synchronised"),
+                    "service_active": state.get("service_active"),
+                },
+            )
+        ]
+    return []
+
+
 def auditor_degraded_check(errors: dict) -> list:
     """Report readers that could not run.
 

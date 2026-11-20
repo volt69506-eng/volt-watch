@@ -335,6 +335,28 @@ def power_restore_state() -> dict:
     return state
 
 
+def clock_state() -> dict:
+    """Read whether the host's clock is being synchronised.
+
+    ``timedatectl show -p NTPSynchronized --value`` answers ``yes`` or ``no``;
+    the human-readable output is locale-dependent and is not parsed. An empty
+    dict means the tool is absent, which the check reads as unknown rather than
+    as broken.
+    """
+    state: dict = {}
+    try:
+        done = _run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
+    except (OSError, subprocess.SubprocessError):
+        return state
+    if done.returncode == 0:
+        answer = done.stdout.strip().lower()
+        if answer in ("yes", "no"):
+            state["synchronised"] = answer == "yes"
+
+    state["service_active"] = unit_active("systemd-timesyncd")
+    return state
+
+
 def unit_enabled(name: str) -> bool | None:
     """Return whether a systemd unit is enabled, or None if systemctl fails."""
     try:
