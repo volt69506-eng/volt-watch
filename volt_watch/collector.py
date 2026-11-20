@@ -22,6 +22,14 @@ LPC_ADDRESS = "00:1f.0"
 LPC_REGISTER = "0xa4.b"
 POWER_UNIT = "mac-mini-power-restore.service"
 
+# A local CLI that answers from a socket or a file needs well under a second.
+# Five seconds is generous for every reader here — `ufw status verbose`,
+# `tailscale status --json`, `sshd -T`, `setpci`, `systemctl` — and a command
+# that has not answered by then is hung, not slow. An auditor that can be held
+# for 30s per reader is an availability problem on the monitoring path: five
+# readers stalled in sequence would block the audit for two and a half minutes.
+TIMEOUT_SECONDS = 5
+
 
 # Readers record why they could not run, so the audit can say "I could not
 # tell" instead of reading an empty answer as a clean one. The map is drained
@@ -53,7 +61,7 @@ def _run(cmd: list, name: str | None = None) -> subprocess.CompletedProcess:
     once rather than twice.
     """
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
     except FileNotFoundError:
         if name:
             _record_error(name, "not installed")

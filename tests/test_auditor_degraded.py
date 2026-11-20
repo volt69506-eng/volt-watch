@@ -97,7 +97,7 @@ def test_a_nonzero_exit_is_recorded(monkeypatch):
 
 def test_a_timeout_is_recorded_as_such(monkeypatch):
     def fake_run(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd, 30)
+        raise subprocess.TimeoutExpired(cmd, collector.TIMEOUT_SECONDS)
 
     monkeypatch.setattr(collector.subprocess, "run", fake_run)
     collector.tailscale_status()
@@ -105,3 +105,34 @@ def test_a_timeout_is_recorded_as_such(monkeypatch):
     errors = collector.collector_errors()
 
     assert errors == {"tailscale_status": "timed out"}
+
+
+def test_the_timeout_is_a_named_constant():
+    """A magic number at the call site cannot be argued about or changed."""
+    assert isinstance(collector.TIMEOUT_SECONDS, int)
+    assert 0 < collector.TIMEOUT_SECONDS <= 15
+
+
+def test_the_run_helper_passes_the_configured_timeout(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return _Result("", 0)
+
+    monkeypatch.setattr(collector.subprocess, "run", fake_run)
+    collector.tailscale_status()
+
+    assert seen["timeout"] == collector.TIMEOUT_SECONDS
+
+
+def test_a_timed_out_reader_returns_the_absent_sentinel(monkeypatch):
+    """A hung tool must not look like a healthy answer."""
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, collector.TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(collector.subprocess, "run", fake_run)
+
+    assert collector.tailscale_status() is None
+    assert collector.collector_errors() == {"tailscale_status": "timed out"}
