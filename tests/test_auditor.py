@@ -9,6 +9,7 @@ from volt_watch import auditor
 _READER_DEFAULTS = {
     "tailscale_services": list,
     "sshd_config": lambda: None,
+    "clock_state": lambda: {"synchronised": True, "service_active": True},
 }
 
 
