@@ -8,11 +8,15 @@ the auditor itself failing. ``info`` findings never change the exit code.
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from .auditor import audit
 
 # The exit code a finding severity contributes to.
 _EXIT_BY_SEVERITY = {"critical": 1, "warning": 1, "info": 0}
+
+# Lower is worse; a rise means the finding got more severe.
+_SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
 
 
 def _parse_args(argv):
@@ -30,7 +34,49 @@ def _parse_args(argv):
         action="store_true",
         help="suppress the plain-text report; the exit code still reports problems",
     )
+    parser.add_argument(
+        "--output",
+        metavar="FILE",
+        help="also write the JSON report to FILE, so the next run can compare against it",
+    )
+    parser.add_argument(
+        "--since",
+        metavar="FILE",
+        help="compare against a previous --output report and exit non-zero only for new or worsened findings",
+    )
     return parser.parse_args(argv)
+
+
+def _finding_key(finding):
+    """The identity of a finding: what it is and the values that justify it.
+
+    The message is excluded on purpose — it can carry volatile values, and a
+    reworded finding is the same finding.
+    """
+    return (finding["check"], json.dumps(finding.get("evidence"), sort_keys=True))
+
+
+def _regressions(current, previous):
+    """Return the findings that are new or worse than the previous report."""
+    before = {_finding_key(f): f["severity"] for f in previous}
+    worse = []
+    for finding in current:
+        key = _finding_key(finding)
+        if key not in before:
+            worse.append(finding)
+        elif _SEVERITY_RANK[finding["severity"]] < _SEVERITY_RANK[before[key]]:
+            worse.append(finding)
+    return worse
+
+
+def _read_baseline(path):
+    """Read a previous report, or None when it is missing or unreadable."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    findings = data.get("findings") if isinstance(data, dict) else None
+    return findings if isinstance(findings, list) else None
 
 
 def _counts(findings):
@@ -59,12 +105,32 @@ def main(argv=None, findings=None) -> int:
     if findings is None:
         findings = [f.as_dict() for f in audit()]
 
-    counts = _counts(findings)
+    baseline = _read_baseline(args.since) if args.since else None
+    if args.since and baseline is None:
+        findings = findings + [
+            {
+                "check": "auditor.no_baseline",
+                "severity": "info",
+                "message": f"No readable baseline at {args.since}; nothing to compare against",
+                "remedy": "Run once with --output to create the baseline.",
+                "evidence": {"since": args.since},
+            }
+        ]
+
+    payload = {"findings": findings, "counts": _counts(findings)}
 
     if args.json:
-        print(json.dumps({"findings": findings, "counts": counts}, indent=2))
+        print(json.dumps(payload, indent=2))
     elif not args.quiet:
         _report(findings)
+
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    if baseline is not None:
+        # Compared against the last report, only a new or worsened finding is a
+        # regression; one that cleared up is the good outcome.
+        return 1 if _regressions(findings, baseline) else 0
 
     worst = max((_EXIT_BY_SEVERITY[f["severity"]] for f in findings), default=0)
     return worst
