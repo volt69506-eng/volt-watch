@@ -3,13 +3,22 @@
 from volt_watch import auditor
 
 
+#: Readers added after these tests were written. They default to "answered,
+#: nothing to report" so a test that only cares about one check does not have to
+#: spell out every reader the audit now calls.
+_READER_DEFAULTS = {
+    "tailscale_services": list,
+    "sshd_config": lambda: None,
+}
+
+
 def _collector(monkeypatch, **values):
     """Replace collector readers with functions returning the given values.
 
     Each value is a zero-argument lambda supplying the reader's result; the
     replacement calls it so the reader returns the payload, not the lambda.
     """
-    for name, produce in values.items():
+    for name, produce in {**_READER_DEFAULTS, **values}.items():
         monkeypatch.setattr(auditor.collector, name, lambda *, _produce=produce: _produce())
 
 
