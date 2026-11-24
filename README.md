@@ -100,6 +100,8 @@ still works exactly as before.
 | `config.drift_unknown` | warning | The `/etc` scan could not be completed, so replaced config files are unknown |
 | `config.world_writable` | critical / warning | A file or directory under `/etc` is world-writable; critical under `ssh/`, `sudoers.d/`, `pam.d/`, `systemd/system/` or `cron.d*` |
 | `config.world_writable_unknown` | warning | The `/etc` scan could not be completed, so world-writable paths are unknown |
+| `security.sensitive_path_permissions` | critical / warning | Sensitive local secret/state paths (LUKS keyfile, SSH host private keys, docker socket, tailscale state) have unsafe permissions |
+| `security.sensitive_path_unknown` | warning | A sensitive path exists but could not be stat/read, so its permissions are unknown |
 | `firewall.disabled` | critical | UFW is installed but inactive, so host firewall rules are not filtering incoming connections |
 | `firewall.default_allow` | critical / warning | The firewall default incoming policy is `allow`, or another policy the auditor cannot classify as safe |
 | `packages.outdated` | info / warning / critical | 1–20, 21–100, over 100 pending package updates |

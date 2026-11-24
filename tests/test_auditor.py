@@ -21,6 +21,7 @@ _READER_DEFAULTS = {
     "empty_password_accounts": list,
     "config_drift": lambda: {"pacnew": [], "pacsave": [], "truncated": False},
     "world_writable_etc": list,
+    "sensitive_path_records": list,
 }
 
 

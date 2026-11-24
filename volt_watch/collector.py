@@ -24,6 +24,15 @@ LPC_ADDRESS = "00:1f.0"
 LPC_REGISTER = "0xa4.b"
 POWER_UNIT = "mac-mini-power-restore.service"
 
+# Small, defensible allowlist of sensitive local paths. Missing paths are not
+# findings; unreadable paths are reported as unknown state by the check.
+SENSITIVE_PATH_SPECS = [
+    {"path": "/crypto_keyfile.bin", "kind": "luks_keyfile"},
+    {"path": "/var/lib/tailscale/tailscaled.state", "kind": "tailscale_state"},
+    {"path": "/run/docker.sock", "kind": "docker_sock"},
+    {"path": "/etc/ssh/ssh_host_*_key", "kind": "ssh_host_private_key"},
+]
+
 # A local CLI that answers from a socket or a file needs well under a second.
 # Five seconds is generous for every reader here — `ufw status verbose`,
 # `tailscale status --json`, `sshd -T`, `setpci`, `systemctl` — and a command
@@ -757,3 +766,91 @@ def world_writable_etc(root: str = "/etc", max_depth: int = MAX_WORLD_WRITABLE_D
         return None
     found.sort(key=lambda item: item["path"])
     return found
+
+
+def _sensitive_expected(kind: str) -> str:
+    return {
+        "luks_keyfile": "0400 root-owned",
+        "tailscale_state": "not world-readable",
+        "docker_sock": "root:docker 0660 or stricter",
+        "ssh_host_private_key": "0600 root-owned",
+    }.get(kind, "restricted")
+
+
+def _expand_sensitive_specs(specs: list[dict]) -> list[dict]:
+    expanded = []
+    for spec in specs:
+        pattern = spec["path"]
+        matches = glob.glob(pattern)
+        if matches:
+            for match in sorted(matches):
+                expanded.append({"path": match, "kind": spec["kind"]})
+        else:
+            expanded.append({"path": pattern, "kind": spec["kind"]})
+    # dedupe preserving order
+    seen = set()
+    out = []
+    for spec in expanded:
+        if spec["path"] in seen:
+            continue
+        seen.add(spec["path"])
+        out.append(spec)
+    return out
+
+
+def sensitive_path_records() -> list[dict]:
+    """Return structured permission records for sensitive local paths.
+
+    Missing paths are omitted. Unreadable existing paths are returned with
+    ``readable=False`` so the check can report unknown state instead of silence.
+    File contents are never read.
+    """
+    records = []
+    for spec in _expand_sensitive_specs(SENSITIVE_PATH_SPECS):
+        path = spec["path"]
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            records.append({
+                "path": path,
+                "exists": True,
+                "mode": None,
+                "uid": None,
+                "gid": None,
+                "owner": None,
+                "group": None,
+                "readable": False,
+                "expected": _sensitive_expected(spec["kind"]),
+                "kind": spec["kind"],
+            })
+            continue
+
+        mode = stat.S_IMODE(st.st_mode)
+        owner = None
+        group = None
+        try:
+            import pwd, grp
+            owner = pwd.getpwuid(st.st_uid).pw_name
+        except Exception:
+            owner = str(st.st_uid)
+        try:
+            import grp
+            group = grp.getgrgid(st.st_gid).gr_name
+        except Exception:
+            group = str(st.st_gid)
+
+        records.append({
+            "path": path,
+            "exists": True,
+            "mode": oct(mode),
+            "uid": st.st_uid,
+            "gid": st.st_gid,
+            "owner": owner,
+            "group": group,
+            "readable": True,
+            "expected": _sensitive_expected(spec["kind"]),
+            "kind": spec["kind"],
+        })
+    return records

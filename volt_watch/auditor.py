@@ -14,6 +14,7 @@ from .checks import (
     orphaned_packages_check,
     pending_updates_check,
     power_restore_check,
+    sensitive_path_permissions_check,
     ssh_exposure_check,
     sshd_config_check,
     tailscale_exposure_check,
@@ -55,6 +56,7 @@ CHECKS: dict[str, list] = {
     ],
     "security": [
         lambda: empty_password_accounts_check(collector.empty_password_accounts()),
+        lambda: sensitive_path_permissions_check(collector.sensitive_path_records()),
     ],
     "time": [lambda: clock_check(collector.clock_state())],
     "disk": [lambda: disk_space_check(collector.disk_usage())],

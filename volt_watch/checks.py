@@ -810,3 +810,127 @@ def firewall_disabled_check(active: bool | None) -> list:
             evidence={"active": False},
         )
     ]
+
+
+def _mode_bits(mode: str | None) -> int | None:
+    if not mode:
+        return None
+    try:
+        return int(mode, 8)
+    except ValueError:
+        return None
+
+
+def _infer_sensitive_kind(record: dict) -> str:
+    kind = record.get("kind", "")
+    if kind:
+        return kind
+    path = record.get("path", "")
+    expected = record.get("expected", "")
+    if path.endswith("/crypto_keyfile.bin") or "0400 root-owned" == expected and "keyfile" in path:
+        return "luks_keyfile"
+    if "/ssh_host_" in path and path.endswith("_key"):
+        return "ssh_host_private_key"
+    if path.endswith("/docker.sock"):
+        return "docker_sock"
+    if path.endswith("tailscaled.state"):
+        return "tailscale_state"
+    if expected == "0400 root-owned":
+        return "luks_keyfile"
+    if expected == "0600 root-owned":
+        return "ssh_host_private_key"
+    return ""
+
+
+def _sensitive_violation(record: dict) -> tuple[Severity, str] | None:
+    mode = _mode_bits(record.get("mode"))
+    kind = _infer_sensitive_kind(record)
+    uid = record.get("uid")
+    if mode is None:
+        return None
+
+    world_readable = bool(mode & 0o004)
+    world_writable = bool(mode & 0o002)
+    group_readable = bool(mode & 0o040)
+    group_writable = bool(mode & 0o020)
+
+    if kind == "luks_keyfile":
+        if mode != 0o400 or uid != 0:
+            return Severity.CRITICAL, "LUKS keyfile must be 0400 and root-owned"
+        return None
+    if kind == "ssh_host_private_key":
+        if mode & 0o077 or uid != 0:
+            return Severity.CRITICAL, "SSH host private key must be 0600 and root-owned"
+        return None
+    if kind == "docker_sock":
+        if world_readable or world_writable or group_writable or mode & 0o001:
+            return Severity.CRITICAL, "Docker socket must not be world-accessible or group-writable"
+        if mode != 0o660 and (group_readable or group_writable):
+            return Severity.WARNING, "Docker socket should be 0660 root:docker or stricter"
+        return None
+    if kind == "tailscale_state":
+        if world_readable or world_writable:
+            return Severity.CRITICAL, "Tailscale state must not be world-readable"
+        if group_readable or group_writable:
+            return Severity.WARNING, "Tailscale state should not be group-accessible"
+        return None
+    if world_readable or world_writable:
+        return Severity.WARNING, "Sensitive path should not be world-accessible"
+    return None
+
+
+def sensitive_path_permissions_check(records: list[dict] | None) -> list:
+    """Report dangerous permissions on a small allowlist of sensitive paths.
+
+    Missing paths are not findings. Unreadable existing paths produce an
+    unknown-state warning scoped to this check. Evidence never includes file
+    contents.
+    """
+    if not records:
+        return []
+
+    bad = []
+    unknown = []
+    for rec in records:
+        if not rec.get("exists"):
+            continue
+        if not rec.get("readable"):
+            unknown.append(rec)
+            continue
+        violation = _sensitive_violation(rec)
+        if violation is None:
+            continue
+        severity, reason = violation
+        bad.append((severity, reason, rec))
+
+    findings = []
+    if bad:
+        # report one finding per path? simpler one finding listing paths; severity max
+        severity = Severity.CRITICAL if any(s is Severity.CRITICAL for s, _, _ in bad) else Severity.WARNING
+        evidence_paths = [{
+            "path": r.get("path"),
+            "mode": r.get("mode"),
+            "uid": r.get("uid"),
+            "gid": r.get("gid"),
+            "owner": r.get("owner"),
+            "group": r.get("group"),
+            "expected": r.get("expected"),
+            "reason": reason,
+        } for severity_item, reason, r in bad]
+        names = ", ".join(r.get("path", "?") for _, _, r in bad)
+        findings.append(Finding(
+            check="security.sensitive_path_permissions",
+            severity=severity,
+            message=f"Sensitive local path(s) have unsafe permissions: {names}",
+            remedy="Restrict permissions/ownership (e.g. chmod 0400 /crypto_keyfile.bin; chmod 0600 /etc/ssh/ssh_host_*_key; chmod 0660 /run/docker.sock root:docker).",
+            evidence={"paths": evidence_paths, "total": len(evidence_paths)},
+        ))
+    for rec in unknown:
+        findings.append(Finding(
+            check="security.sensitive_path_unknown",
+            severity=Severity.WARNING,
+            message=f"Sensitive path exists but could not be read: {rec.get('path')}",
+            remedy="Run the auditor with sufficient privileges to stat sensitive paths.",
+            evidence={"path": rec.get("path"), "expected": rec.get("expected")},
+        ))
+    return findings
