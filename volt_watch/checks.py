@@ -790,3 +790,23 @@ def firewall_default_check(default_incoming: str | None) -> list:
             evidence={"default_incoming": default_incoming},
         )
     ]
+
+
+def firewall_disabled_check(active: bool | None) -> list:
+    """Report an explicitly disabled/inactive UFW firewall.
+
+    ``None`` means the state could not be read; unknown is not a finding and
+    the unreadable firewall state is reported elsewhere. Only the positive
+    "disabled" case is reported here.
+    """
+    if active is not False:
+        return []
+    return [
+        Finding(
+            check="firewall.disabled",
+            severity=Severity.CRITICAL,
+            message="The UFW firewall is inactive, so incoming connections are not filtered by host firewall rules",
+            remedy="Review your rules, then enable UFW (`ufw enable`). Verify remote access first to avoid lockout.",
+            evidence={"active": False},
+        )
+    ]

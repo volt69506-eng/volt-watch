@@ -204,6 +204,28 @@ def ufw_default_incoming() -> str | None:
     return None
 
 
+def ufw_active() -> bool | None:
+    """Report whether UFW is active.
+
+    ``None`` when state cannot be read. The positive disabled case is reported
+    by ``firewall.disabled``; unreadable remains unknown.
+    """
+    try:
+        done = _run(["ufw", "status", "verbose"])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    for line in done.stdout.splitlines():
+        stripped = line.strip().lower()
+        if stripped.startswith("status:"):
+            if "inactive" in stripped:
+                return False
+            if "active" in stripped:
+                return True
+    return None
+
+
 def _read_sshd_files() -> str:
     """Read the effective sshd configuration by hand: the main file, then drop-ins.
 

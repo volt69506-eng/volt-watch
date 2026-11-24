@@ -129,3 +129,20 @@ def test_unit_enabled_false_when_disabled(monkeypatch):
     _run(monkeypatch, {("systemctl", "is-enabled", "mac-mini-power-restore.service"): _Result("disabled\n", 1)})
 
     assert collector.unit_enabled("mac-mini-power-restore.service") is False
+
+class TestUfwActive:
+    def test_active(self, monkeypatch):
+        out = "Status: active\nDefault: deny (incoming), allow (outgoing)\n"
+        monkeypatch.setattr(collector.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": out, "returncode": 0})())
+        assert collector.ufw_active() is True
+
+    def test_inactive(self, monkeypatch):
+        out = "Status: inactive\n"
+        monkeypatch.setattr(collector.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": out, "returncode": 0})())
+        assert collector.ufw_active() is False
+
+    def test_unreadable(self, monkeypatch):
+        def boom(*a, **k):
+            raise OSError("no")
+        monkeypatch.setattr(collector.subprocess, "run", boom)
+        assert collector.ufw_active() is None
