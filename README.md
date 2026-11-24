@@ -71,6 +71,12 @@ UTC `generated_at` timestamp and a `coverage` summary (`readers` attempted and
 `degraded` reader names). `findings` and `counts` keep their shape, and
 `--output` writes the same wrapper, so a `--since` baseline is versioned too.
 
+An `auditor.degraded` finding includes `evidence.errors`, a list of records
+with `reader`, `reason` and `kind`. The kinds are `timeout`, `missing_tool`,
+`permission`, `command_failed` and `unknown`; timeout reasons include the
+reader's time budget. `evidence.readers` remains a reader-to-reason map.
+Neither field includes command output or exception text.
+
 A v1 baseline (which has only `version`, `host`, `findings` and `counts`) stays
 readable: `--since` compares findings only, so new provenance fields cannot
 change the exit code against an older report. A v1 report copied as a baseline

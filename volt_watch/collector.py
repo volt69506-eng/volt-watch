@@ -53,19 +53,20 @@ CHECKUPDATES_TIMEOUT_SECONDS = 30
 # Readers record why they could not run, so the audit can say "I could not
 # tell" instead of reading an empty answer as a clean one. The map is drained
 # by collector_errors().
-_ERRORS: dict[str, str] = {}
+_ERRORS: dict[str, dict[str, str]] = {}
 
 
-def _record_error(name: str, reason: str) -> None:
-    _ERRORS[name] = reason
+def _record_error(name: str, reason: str, kind: str) -> None:
+    _ERRORS[name] = {"reader": name, "reason": reason, "kind": kind}
 
 
-def collector_errors() -> dict:
-    """Map reader name to the reason it could not run, and clear it.
+def collector_errors() -> dict[str, dict[str, str]]:
+    """Map reader names to failure records, and clear them.
 
-    A reader that answered is absent from the map; a reader that raised
-    ``FileNotFoundError`` is ``"not installed"``, a timeout is ``"timed out"``,
-    and a command that answered non-zero is ``"exit <code>"``.
+    Each record has ``reader``, a safe human-readable ``reason``, and a stable
+    ``kind``: timeout, missing_tool, permission, command_failed or unknown.
+    Reasons never include command output or exception text. A reader that
+    answered is absent from the map.
     """
     errors = dict(_ERRORS)
     _ERRORS.clear()
@@ -86,11 +87,19 @@ def _run(cmd: list, name: str | None = None, timeout: int = TIMEOUT_SECONDS) -> 
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
         if name:
-            _record_error(name, "not installed")
+            _record_error(name, "not installed", "missing_tool")
         raise
     except subprocess.TimeoutExpired:
         if name:
-            _record_error(name, "timed out")
+            _record_error(name, f"timed out after {timeout}s", "timeout")
+        raise
+    except PermissionError:
+        if name:
+            _record_error(name, "permission denied", "permission")
+        raise
+    except (OSError, subprocess.SubprocessError):
+        if name:
+            _record_error(name, "could not run", "unknown")
         raise
 
 
@@ -101,7 +110,7 @@ def tailscale_status() -> dict | None:
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode != 0:
-        _record_error("tailscale_status", f"exit {done.returncode}")
+        _record_error("tailscale_status", f"exit {done.returncode}", "command_failed")
         return None
     try:
         return json.loads(done.stdout)
@@ -299,6 +308,8 @@ def sshd_config() -> dict | None:
         done = None
     if done is not None and done.returncode == 0:
         return _parse_sshd_config(done.stdout) | {"source": "sshd -T"}
+    if done is not None:
+        _record_error("sshd_config", f"exit {done.returncode}", "command_failed")
 
     text = _read_sshd_files()
     if not text.strip():
@@ -324,7 +335,7 @@ def tailscale_services() -> list:
     except (OSError, subprocess.SubprocessError):
         return []
     if done.returncode != 0:
-        _record_error("tailscale_services", f"exit {done.returncode}")
+        _record_error("tailscale_services", f"exit {done.returncode}", "command_failed")
         return []
     try:
         config = json.loads(done.stdout)
@@ -435,6 +446,7 @@ def pending_update_count() -> int | None:
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode not in (0, 2):
+        _record_error("pending_update_count", f"exit {done.returncode}", "command_failed")
         return None
     return len([line for line in done.stdout.splitlines() if line.strip()])
 

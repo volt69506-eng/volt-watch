@@ -204,10 +204,13 @@ def auditor_degraded_check(errors: dict) -> list:
             severity=Severity.WARNING,
             message=(
                 f"{len(errors)} reader(s) could not run, so this report is incomplete: "
-                + ", ".join(sorted(errors))
+                + ", ".join(f"{name} ({errors[name]['reason']})" for name in sorted(errors))
             ),
             remedy="Install the missing tools, or run the auditor as root where a reader needs it.",
-            evidence={"readers": dict(errors)},
+            evidence={
+                "readers": {name: error["reason"] for name, error in errors.items()},
+                "errors": [errors[name] for name in sorted(errors)],
+            },
         )
     ]
 

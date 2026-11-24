@@ -137,4 +137,6 @@ def test_a_checkupdates_timeout_is_still_a_degraded_reader(monkeypatch):
 
     assert collector.pending_update_count() is None
     # Other readers' entries may be in the map; this one has to be.
-    assert collector.collector_errors()["pending_update_count"] == "timed out"
+    error = collector.collector_errors()["pending_update_count"]
+    assert error["kind"] == "timeout"
+    assert error["reason"] == f"timed out after {collector.CHECKUPDATES_TIMEOUT_SECONDS}s"

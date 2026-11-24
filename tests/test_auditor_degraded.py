@@ -92,7 +92,11 @@ def test_a_nonzero_exit_is_recorded(monkeypatch):
 
     errors = collector.collector_errors()
 
-    assert errors == {"tailscale_status": "exit 1"}
+    assert errors == {
+        "tailscale_status": {
+            "reader": "tailscale_status", "reason": "exit 1", "kind": "command_failed"
+        }
+    }
 
 
 def test_a_timeout_is_recorded_as_such(monkeypatch):
@@ -104,7 +108,13 @@ def test_a_timeout_is_recorded_as_such(monkeypatch):
 
     errors = collector.collector_errors()
 
-    assert errors == {"tailscale_status": "timed out"}
+    assert errors == {
+        "tailscale_status": {
+            "reader": "tailscale_status",
+            "reason": f"timed out after {collector.TIMEOUT_SECONDS}s",
+            "kind": "timeout",
+        }
+    }
 
 
 def test_the_timeout_is_a_named_constant():
@@ -135,4 +145,10 @@ def test_a_timed_out_reader_returns_the_absent_sentinel(monkeypatch):
     monkeypatch.setattr(collector.subprocess, "run", fake_run)
 
     assert collector.tailscale_status() is None
-    assert collector.collector_errors() == {"tailscale_status": "timed out"}
+    assert collector.collector_errors() == {
+        "tailscale_status": {
+            "reader": "tailscale_status",
+            "reason": f"timed out after {collector.TIMEOUT_SECONDS}s",
+            "kind": "timeout",
+        }
+    }
