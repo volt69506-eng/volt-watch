@@ -37,6 +37,19 @@ Each of these is invisible from the desktop and obvious in hindsight.
 pip install volt-watch          # or: pipx install volt-watch
 ```
 
+## Development & CI
+
+Tests run in GitHub Actions on Python 3.10-3.14 (`.github/workflows/ci.yml`) for pushes and pull requests.
+
+```bash
+python -m pip install --upgrade pip pytest
+python -m pip install -e .
+python -m pytest -q
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for TDD expectations and security reporting guidance.
+
+
 Needs Python 3.10+. Reads `tailscale`, `ufw`, `setpci` and `systemctl` from the
 host; a missing tool is treated as "not applicable" rather than as an error.
 
