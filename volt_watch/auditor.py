@@ -12,6 +12,7 @@ from .checks import (
     firewall_disabled_check,
     kernel_reboot_check,
     orphaned_packages_check,
+    passwordless_sudo_check,
     pending_updates_check,
     power_restore_check,
     sensitive_path_permissions_check,
@@ -57,6 +58,7 @@ CHECKS: dict[str, list] = {
     "security": [
         lambda: empty_password_accounts_check(collector.empty_password_accounts()),
         lambda: sensitive_path_permissions_check(collector.sensitive_path_records()),
+        lambda: passwordless_sudo_check(collector.passwordless_sudo_rules()),
     ],
     "time": [lambda: clock_check(collector.clock_state())],
     "disk": [lambda: disk_space_check(collector.disk_usage())],

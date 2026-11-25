@@ -33,6 +33,9 @@ SENSITIVE_PATH_SPECS = [
     {"path": "/etc/ssh/ssh_host_*_key", "kind": "ssh_host_private_key"},
 ]
 
+SUDOERS_PATH = "/etc/sudoers"
+SUDOERS_D_GLOB = "/etc/sudoers.d/*"
+
 # A local CLI that answers from a socket or a file needs well under a second.
 # Five seconds is generous for every reader here — `ufw status verbose`,
 # `tailscale status --json`, `sshd -T`, `setpci`, `systemctl` — and a command
@@ -854,3 +857,122 @@ def sensitive_path_records() -> list[dict]:
             "kind": spec["kind"],
         })
     return records
+
+
+_NOTAFTER_RE = re.compile(r"\bNOTAFTER=(\d{14}Z)\b")
+_NOPASSWD_RE = re.compile(r"\bNOPASSWD\s*:")
+
+
+def _sudoers_includes(text: str) -> list[str]:
+    includes = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            # #includedir/#include directives start with # but are directives
+            if stripped.lower().startswith("#includedir"):
+                pat = stripped.split(None, 1)[1].strip() if len(stripped.split(None, 1)) > 1 else ""
+                if pat:
+                    for match in sorted(glob.glob(pat + "/*")):
+                        if os.path.basename(match).startswith(".") or match.endswith("~"):
+                            continue
+                        includes.append(match)
+            elif stripped.lower().startswith("#include"):
+                pat = stripped.split(None, 1)[1].strip() if len(stripped.split(None, 1)) > 1 else ""
+                if pat:
+                    for match in sorted(glob.glob(pat)):
+                        includes.append(match)
+            continue
+    return includes
+
+
+def _parse_notafter(value: str) -> str | None:
+    # value like 20261123234621Z
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.strptime(value, "%Y%m%d%H%M%SZ").replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    except Exception:
+        return None
+
+
+def _is_notafter_expired(value: str | None, now=None) -> bool | None:
+    if not value:
+        return None
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.strptime(value, "%Y%m%d%H%M%SZ").replace(tzinfo=timezone.utc)
+        if now is None:
+            now = datetime.now(timezone.utc)
+        return dt <= now
+    except Exception:
+        return None
+
+
+def _parse_sudoers_rules(text: str, source: str, now=None) -> list[dict]:
+    rules = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "NOPASSWD" not in line.upper():
+            continue
+        # skip Defaults lines
+        if line.lower().startswith("defaults"):
+            continue
+        # very small parser: split at first '=' before command spec? sudoers rules usually: user host=(runas) tags: commands
+        # find commands after last ':'
+        if ":" not in line:
+            continue
+        left, commands = line.rsplit(":", 1)
+        commands = commands.strip()
+        if not commands:
+            continue
+        upper_left = left.upper()
+        if "NOPASSWD" not in upper_left and "!AUTHENTICATE" not in upper_left:
+            continue
+        notafter_m = _NOTAFTER_RE.search(line)
+        notafter = notafter_m.group(1) if notafter_m else None
+        expired = _is_notafter_expired(notafter, now=now)
+        # user is first token
+        user = line.split()[0]
+        rules.append({
+            "file": source,
+            "user": user,
+            "commands": commands,
+            "notafter": notafter,
+            "notafter_expired": expired,
+            "nopasswd": True,
+        })
+    return rules
+
+
+def passwordless_sudo_rules(now=None) -> list[dict] | None:
+    """Parse sudoers for NOPASSWD rules.
+
+    Intentionally small line-oriented parser; not a full sudoers grammar.
+    Returns None when sudoers cannot be read (unknown), [] when no sudoers
+    exists on a non-Linux host-like layout? Missing /etc/sudoers is treated as
+    not a finding by returning [].
+    """
+    paths = []
+    try:
+        if not os.path.exists(SUDOERS_PATH):
+            return []
+        with open(SUDOERS_PATH, "r", encoding="utf-8", errors="replace") as f:
+            main_text = f.read()
+    except OSError:
+        return None
+
+    texts = [(SUDOERS_PATH, main_text)]
+    for inc in _sudoers_includes(main_text):
+        try:
+            with open(inc, "r", encoding="utf-8", errors="replace") as f:
+                texts.append((inc, f.read()))
+        except OSError:
+            # unreadable include: return None? better mark unknown overall
+            return None
+
+    rules = []
+    for source, text in texts:
+        rules.extend(_parse_sudoers_rules(text, source, now=now))
+    return rules

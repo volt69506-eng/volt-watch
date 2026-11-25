@@ -22,6 +22,7 @@ _READER_DEFAULTS = {
     "config_drift": lambda: {"pacnew": [], "pacsave": [], "truncated": False},
     "world_writable_etc": list,
     "sensitive_path_records": list,
+    "passwordless_sudo_rules": list,
 }
 
 

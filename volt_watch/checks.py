@@ -905,7 +905,6 @@ def sensitive_path_permissions_check(records: list[dict] | None) -> list:
 
     findings = []
     if bad:
-        # report one finding per path? simpler one finding listing paths; severity max
         severity = Severity.CRITICAL if any(s is Severity.CRITICAL for s, _, _ in bad) else Severity.WARNING
         evidence_paths = [{
             "path": r.get("path"),
@@ -932,5 +931,42 @@ def sensitive_path_permissions_check(records: list[dict] | None) -> list:
             message=f"Sensitive path exists but could not be read: {rec.get('path')}",
             remedy="Run the auditor with sufficient privileges to stat sensitive paths.",
             evidence={"path": rec.get("path"), "expected": rec.get("expected")},
+        ))
+    return findings
+
+
+def passwordless_sudo_check(rules: list[dict] | None) -> list:
+    """Report passwordless sudo grants.
+
+    ``None`` means sudoers could not be read (unknown); not a finding here.
+    Missing sudoers is represented as [] by collector and is not a finding.
+    """
+    if not rules:
+        return []
+    findings = []
+    for rule in rules:
+        if not rule.get("nopasswd"):
+            continue
+        commands = str(rule.get("commands", "")).strip()
+        expired = bool(rule.get("notafter_expired"))
+        critical = commands.upper() == "ALL" and not expired
+        severity = Severity.CRITICAL if critical else Severity.WARNING
+        notafter = rule.get("notafter")
+        deadline = f" (NOTAFTER {notafter}, deadline passed)" if expired and notafter else (f" (NOTAFTER {notafter})" if notafter else "")
+        findings.append(Finding(
+            check="security.passwordless_sudo",
+            severity=severity,
+            message=(
+                f"Passwordless sudo grant for {rule.get('user', '?')} in {rule.get('file', '?')}: "
+                f"NOPASSWD {commands}{deadline}"
+            ),
+            remedy="Remove or narrow the NOPASSWD rule; require authentication for full sudo where possible.",
+            evidence={
+                "file": rule.get("file"),
+                "user": rule.get("user"),
+                "commands": commands,
+                "notafter": notafter,
+                "expired": expired,
+            },
         ))
     return findings
