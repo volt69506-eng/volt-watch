@@ -23,6 +23,7 @@ _READER_DEFAULTS = {
     "world_writable_etc": list,
     "sensitive_path_records": list,
     "passwordless_sudo_rules": list,
+    "listening_ports": list,
 }
 
 

@@ -11,6 +11,7 @@ from .checks import (
     firewall_default_check,
     firewall_disabled_check,
     kernel_reboot_check,
+    listener_exposure_check,
     orphaned_packages_check,
     passwordless_sudo_check,
     pending_updates_check,
@@ -54,6 +55,13 @@ CHECKS: dict[str, list] = {
         lambda: firewall_disabled_check(collector.ufw_active()),
         lambda: firewall_default_check(collector.ufw_default_incoming()),
         _ssh_exposure,
+    ],
+    "network": [
+        lambda: listener_exposure_check(
+            collector.listening_ports(),
+            collector.ufw_rules(),
+            collector.ufw_default_incoming(),
+        ),
     ],
     "security": [
         lambda: empty_password_accounts_check(collector.empty_password_accounts()),

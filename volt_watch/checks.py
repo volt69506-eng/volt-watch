@@ -970,3 +970,85 @@ def passwordless_sudo_check(rules: list[dict] | None) -> list:
             },
         ))
     return findings
+
+
+def _listener_is_wide_bind(addr: str) -> bool:
+    return addr in {"0.0.0.0", "::", "*"}
+
+
+def _listener_is_loopback(addr: str) -> bool:
+    try:
+        return ipaddress.ip_address(addr).is_loopback
+    except ValueError:
+        return addr in {"localhost"}
+
+
+def _listener_is_tailscale(addr: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+        return ip in ipaddress.ip_network("100.64.0.0/10") or ip in ipaddress.ip_network("fd7a:115c:a1e0::/48")
+    except ValueError:
+        return False
+
+
+def _port_covered_by_tailscale_only(port: int, proto: str, rules: list[dict]) -> bool:
+    token = f"{port}/{proto}"
+    token_any = str(port)
+    for rule in rules:
+        if rule.get("action") != "ALLOW":
+            continue
+        rp = str(rule.get("port", ""))
+        if rp not in {token, token_any}:
+            continue
+        iface = rule.get("interface", "")
+        src = str(rule.get("source", "")).lower()
+        if iface == "tailscale0" or "tailscale" in src:
+            # if rule is scoped to tailscale interface, consider covered
+            return True
+    return False
+
+
+def listener_exposure_check(listeners: list[dict] | None, rules: list[dict] | None, default_incoming: str | None = "deny") -> list:
+    """Report non-loopback wide-bind listeners.
+
+    Firewall unreadable => unknown, not silence. Loopback/tailscale-only binds
+    are ignored. A wide bind with deny default and no explicit rule is INFO;
+    allow default is WARNING.
+    """
+    if listeners is None:
+        return []
+    if rules is None or default_incoming is None:
+        return [Finding(
+            check="network.firewall_unreadable",
+            severity=Severity.WARNING,
+            message="Firewall state could not be read, so listener exposure is unknown",
+            remedy="Run as root or grant access to firewall status commands.",
+            evidence={"default_incoming": default_incoming},
+        )]
+    findings = []
+    for l in listeners:
+        addr = str(l.get("address", ""))
+        port = int(l.get("port", 0))
+        proto = str(l.get("proto", "tcp")).lower()
+        if port == 22 and proto == "tcp":
+            continue  # ssh_exposure_check owns SSH
+        if _listener_is_loopback(addr) or _listener_is_tailscale(addr):
+            continue
+        if not _listener_is_wide_bind(addr):
+            continue
+        if _port_covered_by_tailscale_only(port, proto, rules):
+            continue
+        if default_incoming == "allow":
+            severity = Severity.WARNING
+            msg = f"Listener {proto}/{port} binds {addr} and firewall default allows incoming"
+        else:
+            severity = Severity.INFO
+            msg = f"Listener {proto}/{port} binds {addr}; firewall default denies but port is not explicitly restricted"
+        findings.append(Finding(
+            check="network.listener_wide_bind",
+            severity=severity,
+            message=msg,
+            remedy="Bind the service to loopback/tailscale interface, or add a firewall rule restricting access (prefer tailscale0).",
+            evidence={"address": addr, "port": port, "proto": proto, "process": l.get("process", "")},
+        ))
+    return findings

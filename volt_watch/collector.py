@@ -976,3 +976,65 @@ def passwordless_sudo_rules(now=None) -> list[dict] | None:
     for source, text in texts:
         rules.extend(_parse_sudoers_rules(text, source, now=now))
     return rules
+
+
+def _parse_ss_listeners(output: str) -> list[dict]:
+    listeners = []
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        # ss -tulpnH: Netid State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+        proto = parts[0].lower()
+        if proto not in {"tcp", "udp"}:
+            continue
+        local = parts[4]
+        if ":" not in local:
+            continue
+        addr, port = local.rsplit(":", 1)
+        addr = addr.strip("[]")
+        if addr.startswith("%", 0):
+            pass
+        # strip zone id
+        if "%" in addr:
+            addr = addr.split("%", 1)[0]
+        # process field like users:(("name",pid=...,fd=...))
+        process = ""
+        m = re.search(r'users:\(\("([^"]+)"', line)
+        if m:
+            process = m.group(1)
+        try:
+            port_i = int(port)
+        except ValueError:
+            continue
+        listeners.append({
+            "address": addr,
+            "port": port_i,
+            "proto": proto,
+            "process": process,
+        })
+    # dedupe
+    seen = set()
+    out = []
+    for l in listeners:
+        key = (l["address"], l["port"], l["proto"], l["process"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(l)
+    return out
+
+
+def listening_ports() -> list[dict] | None:
+    """Return listening TCP/UDP sockets.
+
+    Uses `ss -tulpnH`. None means the reader could not run. Process names may be
+    missing without root; sockets are still reported.
+    """
+    try:
+        done = _run(["ss", "-tulpnH"])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return _parse_ss_listeners(done.stdout)
