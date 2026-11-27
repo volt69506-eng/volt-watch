@@ -64,16 +64,23 @@ $ volt-watch; echo $?            # 0 = clean, 1 = warnings or worse
 $ volt-watch --output /var/lib/volt-watch/last.json
 $ volt-watch --since /var/lib/volt-watch/last.json
 $ volt-watch --check power       # only the power.* checks
+$ volt-watch --fail-on critical  # exit 1 only for critical findings
 ```
 
-Exit codes: `0` clean (or only `info`), `1` at least one warning or critical.
-`info` findings never change the exit code, so the tool is usable as a
-monitoring check.
+Exit codes: `0` clean at the selected threshold, `1` at least one finding at or
+above it, `2` an auditor or usage error. The default threshold is `warning`, so
+`info` findings do not change the exit code. `--fail-on` takes `critical`,
+`warning` or `info`: use `critical` to gate CI on serious findings only, or
+`info` during a hardening push. An invalid value exits 2. **A degraded audit
+always exits 1**, whatever the threshold — an incomplete report is never green.
 
 `--output` writes the same JSON `--json` prints, so the next run can read it.
 `--since` compares against it: a finding that is new or got worse exits 1, one
-that cleared up exits 0. The comparison uses the check and its evidence, not the
-message text. A missing baseline adds an `auditor.no_baseline` `info` finding.
+that cleared up exits 0. With `--since`, `--fail-on` applies to the new or
+worsened findings; an explicit threshold is needed because the default there is
+"any regression" (including `info`) for backwards compatibility. The comparison
+uses the check and its evidence, not the message text. A missing baseline adds
+an `auditor.no_baseline` `info` finding.
 
 `--check PREFIX` runs only the checks whose name starts with the prefix, so
 `--check power` runs every `power.*` check and nothing else. An unknown prefix

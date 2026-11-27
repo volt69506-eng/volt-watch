@@ -1,8 +1,11 @@
 """Command line entry point.
 
-Exit codes follow the usual monitoring convention: 0 means no problem worth
-acting on, 1 means at least one warning or critical finding, 2 is reserved for
-the auditor itself failing. ``info`` findings never change the exit code.
+Exit codes follow the usual monitoring convention: 0 means no finding at or
+above the selected threshold, 1 means there was one, and 2 is an auditor error
+or a usage error. The default threshold is `warning`; `--fail-on` changes it to
+`critical` (only serious findings) or `info` (any finding). A degraded audit
+always exits 1, whatever the threshold. With `--since`, the threshold applies to
+new or worsened findings, and the default is any regression.
 """
 
 import argparse
@@ -14,10 +17,8 @@ from pathlib import Path
 
 from .auditor import audit, audit_with_coverage, check_prefixes  # noqa: F401 - audit is a public seam
 
-# The exit code a finding severity contributes to.
-_EXIT_BY_SEVERITY = {"critical": 1, "warning": 1, "info": 0}
-
-# Lower is worse; a rise means the finding got more severe.
+# Lower is worse; a rise means the finding got more severe. The same ranking
+# drives --since comparisons and the --fail-on threshold so they cannot disagree.
 _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
 
 # Bump when the report shape changes in a way a consumer must know about.
@@ -86,6 +87,14 @@ def _parse_args(argv):
         "--check",
         metavar="PREFIX",
         help="run only the checks whose name starts with PREFIX, e.g. --check power",
+    )
+    parser.add_argument(
+        "--fail-on",
+        choices=("critical", "warning", "info"),
+        help=(
+            "minimum severity that makes the exit code 1 (default: warning; "
+            "with --since, any new or worsened finding)"
+        ),
     )
     return parser.parse_args(argv)
 
@@ -165,13 +174,41 @@ def _report(findings):
     print(f"{len(findings)} finding(s)")
 
 
+def _at_or_above(findings, threshold: str) -> bool:
+    """Whether any finding is at least as severe as ``threshold``."""
+    limit = _SEVERITY_RANK[threshold]
+    return any(_SEVERITY_RANK[f["severity"]] <= limit for f in findings)
+
+
+def _exit_code(findings, threshold: str, baseline) -> int:
+    """Decide the exit code from the findings the run actually selected.
+
+    An incomplete audit is never green, whatever the threshold. With a
+    baseline only new or worsened findings count; without one every finding
+    counts. ``auditor.baseline_invalid`` describes the tool, not the host.
+    """
+    if any(f["check"] == "auditor.degraded" for f in findings):
+        return 1
+    if baseline is not None:
+        host = [f for f in findings if f["check"] != "auditor.baseline_invalid"]
+        return 1 if _at_or_above(_regressions(host, baseline), threshold) else 0
+    return 1 if _at_or_above(findings, threshold) else 0
+
+
 def main(argv=None, findings=None) -> int:
     """Run the audit and print the report.
 
     ``findings`` is a test seam: when supplied, the audit is skipped and those
     findings are reported instead.
     """
-    args = _parse_args(argv if argv is not None else sys.argv[1:])
+    try:
+        args = _parse_args(argv if argv is not None else sys.argv[1:])
+    except SystemExit as exc:
+        # Usage errors become a normal exit code; --help keeps argparse's
+        # usual SystemExit(0) so callers that capture it still work.
+        if exc.code == 0:
+            raise
+        return 2
 
     if args.check and not any(p.startswith(args.check) for p in check_prefixes()):
         available = ", ".join(check_prefixes())
@@ -233,16 +270,10 @@ def main(argv=None, findings=None) -> int:
     elif not args.quiet:
         _report(findings)
 
-    if baseline is not None:
-        # Compared against the last report, only a new or worsened finding is a
-        # regression; one that cleared up is the good outcome. The invalid
-        # baseline warning describes the tool, not the host, so it must not
-        # decide the exit code.
-        host = [f for f in findings if f["check"] != "auditor.baseline_invalid"]
-        return 1 if _regressions(host, baseline) else 0
-
-    worst = max((_EXIT_BY_SEVERITY[f["severity"]] for f in findings), default=0)
-    return worst
+    # No explicit threshold means today's behaviour: warning and above, or
+    # any regression when comparing against a baseline.
+    threshold = args.fail_on or ("info" if baseline is not None else "warning")
+    return _exit_code(findings, threshold, baseline)
 
 
 if __name__ == "__main__":

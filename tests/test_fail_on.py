@@ -76,6 +76,14 @@ def test_since_without_a_threshold_keeps_alerting_on_any_new_finding(tmp_path, c
     capsys.readouterr()
 
 
+def test_help_documents_fail_on(capsys):
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--help"])
+
+    assert raised.value.code == 0
+    assert "--fail-on" in capsys.readouterr().out
+
+
 def test_fail_on_does_not_change_the_report(capsys):
     payload = cli.main(["--json", "--fail-on", "critical"], findings=[_finding("a", "warning")])
 
