@@ -41,6 +41,10 @@ REBOOT_REQUIRED_PATHS = [
     "/var/run/reboot-required",
 ]
 
+SENSITIVE_RUNTIME_DIRS = [
+    "/var/lib/tailscale",
+]
+
 # A local CLI that answers from a socket or a file needs well under a second.
 # Five seconds is generous for every reader here — `ufw status verbose`,
 # `tailscale status --json`, `sshd -T`, `setpci`, `systemctl` — and a command
@@ -1060,3 +1064,48 @@ def reboot_required_markers() -> list[str]:
         except OSError:
             continue
     return found
+
+
+def sensitive_runtime_dirs() -> list[str]:
+    """Return existing sensitive runtime dirs to scan (bounded, explicit)."""
+    found = []
+    for path in SENSITIVE_RUNTIME_DIRS:
+        try:
+            if os.path.isdir(path):
+                found.append(path)
+        except OSError:
+            continue
+    return found
+
+
+def sensitive_runtime_world_writable(dirs: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+    """Find world-writable entries in sensitive runtime dirs.
+
+    Bounded scan: top-level entries only (no recursive walk) to avoid noise and
+    load on large dirs. Returns (records, errors).
+    Each record: {path, mode, is_dir}. Errors: {path, error}.
+    Missing dirs are ignored (no finding).
+    """
+    records = []
+    errors = []
+    for base in (dirs or sensitive_runtime_dirs()):
+        try:
+            if not os.path.exists(base):
+                continue
+            with os.scandir(base) as it:
+                for entry in it:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        errors.append({"path": entry.path, "error": str(exc)})
+                        continue
+                    mode = st.st_mode
+                    if mode & 0o002:
+                        records.append({
+                            "path": entry.path,
+                            "mode": oct(mode & 0o777),
+                            "is_dir": entry.is_dir(follow_symlinks=False),
+                        })
+        except OSError as exc:
+            errors.append({"path": base, "error": str(exc)})
+    return records, errors

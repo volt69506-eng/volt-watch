@@ -118,6 +118,8 @@ still works exactly as before.
 | `config.world_writable` | critical / warning | A file or directory under `/etc` is world-writable; critical under `ssh/`, `sudoers.d/`, `pam.d/`, `systemd/system/` or `cron.d*` |
 | `config.world_writable_unknown` | warning | The `/etc` scan could not be completed, so world-writable paths are unknown |
 | `security.sensitive_path_permissions` | critical / warning | Sensitive local secret/state paths (LUKS keyfile, SSH host private keys, docker socket, tailscale state) have unsafe permissions |
+| `security.world_writable_sensitive_runtime` | critical | World-writable entry in a sensitive runtime directory (bounded top-level scan) |
+| `security.sensitive_runtime_unknown` | warning | Could not inspect a sensitive runtime directory |
 | `security.sensitive_path_unknown` | warning | A sensitive path exists but could not be stat/read, so its permissions are unknown |
 | `security.passwordless_sudo` | critical / warning | A sudoers rule grants NOPASSWD; critical for full `ALL`, warning for narrow/expired grants |
 | `firewall.disabled` | critical | UFW is installed but inactive, so host firewall rules are not filtering incoming connections |

@@ -1107,3 +1107,32 @@ def reboot_required_check(markers: list[str] | None) -> list:
             evidence={"markers": present},
         )
     ]
+
+
+def sensitive_runtime_world_writable_check(records: list[dict] | None, errors: list[dict] | None = None) -> list:
+    """Report world-writable entries in sensitive runtime dirs.
+
+    Bounded/explicit scan; missing dirs yield no findings. Unreadable dirs are
+    surfaced as unknown warnings.
+    """
+    findings = []
+    for rec in (records or []):
+        path = str(rec.get("path", ""))
+        mode = rec.get("mode", "")
+        is_dir = bool(rec.get("is_dir"))
+        findings.append(Finding(
+            check="security.world_writable_sensitive_runtime",
+            severity=Severity.CRITICAL,
+            message=f"World-writable {'directory' if is_dir else 'file'} in sensitive runtime path: {path}",
+            remedy="Restrict permissions (remove world-writable bit) and investigate why it was writable.",
+            evidence={"path": path, "mode": mode, "is_dir": is_dir},
+        ))
+    for err in (errors or []):
+        findings.append(Finding(
+            check="security.sensitive_runtime_unknown",
+            severity=Severity.WARNING,
+            message=f"Could not inspect sensitive runtime path: {err.get('path', '')}",
+            remedy="Run with sufficient privileges to inspect sensitive runtime directories.",
+            evidence={"path": err.get("path", ""), "error": err.get("error", "")},
+        ))
+    return findings

@@ -24,6 +24,7 @@ _READER_DEFAULTS = {
     "sensitive_path_records": list,
     "passwordless_sudo_rules": list,
     "listening_ports": list,
+    "sensitive_runtime_world_writable": lambda: ([], []),
 }
 
 
