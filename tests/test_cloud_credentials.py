@@ -62,7 +62,10 @@ def test_world_readable_aws_credentials_are_critical():
     assert findings[0].check == "security.sensitive_path_permissions"
     assert findings[0].severity is Severity.CRITICAL
     assert "chmod 600" in findings[0].remedy
-    assert "/home/alice/.aws/credentials" in findings[0].evidence["paths"]
+    assert any(
+        item["path"] == "/home/alice/.aws/credentials"
+        for item in findings[0].evidence["paths"]
+    )
 
 
 def test_world_readable_docker_config_is_a_warning():

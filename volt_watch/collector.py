@@ -18,6 +18,10 @@ from pathlib import Path
 # Reader seam: tests point this at a fake /proc tree. Production never changes it.
 PROC_ROOT = Path("/proc")
 
+# Whose home the tilde paths in SENSITIVE_PATH_SPECS refer to. The audit runs
+# as one user, so that is the home we inspect; tests override this seam.
+HOME = Path.home()
+
 # ufw rule rows have a fixed Action column, but the To column before it may be
 # one token ("22/tcp") or two ("172.17.0.1 53/udp"). Anchor on the action.
 _ACTIONS = {"ALLOW", "DENY", "REJECT", "LIMIT"}
@@ -35,6 +39,12 @@ SENSITIVE_PATH_SPECS = [
     {"path": "/var/lib/tailscale/tailscaled.state", "kind": "tailscale_state"},
     {"path": "/run/docker.sock", "kind": "docker_sock"},
     {"path": "/etc/ssh/ssh_host_*_key", "kind": "ssh_host_private_key"},
+    # Narrow allowlist of credential files that are commonly copied by hand
+    # onto a single host and end up world-readable. No recursive scanning.
+    {"path": "~/.aws/credentials", "kind": "cloud_credential"},
+    {"path": "~/.config/gcloud/application_default_credentials.json", "kind": "cloud_credential"},
+    {"path": "~/.kube/config", "kind": "cloud_credential"},
+    {"path": "~/.docker/config.json", "kind": "container_credential"},
     {"path": "/home/*/.ssh/id_*", "kind": "ssh_user_private_key"},
     {"path": "/root/.ssh/id_*", "kind": "ssh_user_private_key"},
 ]
@@ -840,6 +850,8 @@ def _sensitive_expected(kind: str) -> str:
         "tailscale_state": "not world-readable",
         "docker_sock": "root:docker 0660 or stricter",
         "ssh_host_private_key": "0600 root-owned",
+        "cloud_credential": "0600 owner-owned",
+        "container_credential": "0600 owner-owned",
         "ssh_user_private_key": "0600 owner-owned",
     }.get(kind, "restricted")
 
@@ -848,6 +860,8 @@ def _expand_sensitive_specs(specs: list[dict]) -> list[dict]:
     expanded = []
     for spec in specs:
         pattern = spec["path"]
+        if pattern == "~" or pattern.startswith("~/"):
+            pattern = str(HOME / pattern[2:]) if pattern.startswith("~/") else str(HOME)
         matches = glob.glob(pattern)
         if matches:
             for match in sorted(matches):

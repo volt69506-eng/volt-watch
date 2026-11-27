@@ -133,7 +133,7 @@ still works exactly as before.
 | `config.drift_unknown` | warning | The `/etc` scan could not be completed, so replaced config files are unknown |
 | `config.world_writable` | critical / warning | A file or directory under `/etc` is world-writable; critical under `ssh/`, `sudoers.d/`, `pam.d/`, `systemd/system/` or `cron.d*` |
 | `config.world_writable_unknown` | warning | The `/etc` scan could not be completed, so world-writable paths are unknown |
-| `security.sensitive_path_permissions` | critical / warning | Sensitive local secret/state paths (LUKS keyfile, SSH host private keys, SSH user private keys under `~/.ssh/`, docker socket, tailscale state) have unsafe permissions |
+| `security.sensitive_path_permissions` | critical / warning | Sensitive local secret/state paths (LUKS keyfile, SSH host and user private keys, cloud/container credentials under `~`, docker socket, tailscale state) have unsafe permissions |
 | `security.world_writable_sensitive_runtime` | critical | World-writable entry in a sensitive runtime directory (bounded top-level scan) |
 | `security.sensitive_runtime_unknown` | warning | Could not inspect a sensitive runtime directory |
 | `security.sensitive_path_unknown` | warning | A sensitive path exists but could not be stat/read, so its permissions are unknown |

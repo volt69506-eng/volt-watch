@@ -915,6 +915,14 @@ def _infer_sensitive_kind(record: dict) -> str:
         return "docker_sock"
     if path.endswith("tailscaled.state"):
         return "tailscale_state"
+    if path.endswith("/.docker/config.json"):
+        return "container_credential"
+    if (
+        path.endswith("/.aws/credentials")
+        or path.endswith("application_default_credentials.json")
+        or path.endswith("/.kube/config")
+    ):
+        return "cloud_credential"
     if expected == "0400 root-owned":
         return "luks_keyfile"
     if expected == "0600 root-owned":
@@ -945,6 +953,14 @@ def _sensitive_violation(record: dict) -> tuple[Severity, str] | None:
     if kind == "ssh_user_private_key":
         if mode & 0o077:
             return Severity.CRITICAL, "SSH user private key must be 0600"
+        return None
+    if kind == "cloud_credential":
+        if mode & 0o077:
+            return Severity.CRITICAL, "Cloud credential must be 0600"
+        return None
+    if kind == "container_credential":
+        if mode & 0o077:
+            return Severity.WARNING, "Container registry credential should be 0600"
         return None
     if kind == "docker_sock":
         if world_readable or world_writable or group_writable or mode & 0o001:
@@ -1005,7 +1021,12 @@ def sensitive_path_permissions_check(records: list[dict] | None) -> list:
             check="security.sensitive_path_permissions",
             severity=severity,
             message=f"Sensitive local path(s) have unsafe permissions: {names}",
-            remedy="Restrict permissions/ownership (e.g. chmod 0400 /crypto_keyfile.bin; chmod 0600 /etc/ssh/ssh_host_*_key; chmod 0600 ~/.ssh/id_*; chmod 0660 /run/docker.sock root:docker).",
+            remedy=(
+                "Restrict permissions/ownership (e.g. chmod 0400 /crypto_keyfile.bin; "
+                "chmod 0600 /etc/ssh/ssh_host_*_key and ~/.ssh/id_*; "
+                "chmod 600 ~/.aws/credentials ~/.kube/config ~/.docker/config.json; "
+                "chmod 0660 /run/docker.sock root:docker)."
+            ),
             evidence={"paths": evidence_paths, "total": len(evidence_paths)},
         ))
     for rec in unknown:
