@@ -1043,10 +1043,20 @@ def listener_exposure_check(listeners: list[dict] | None, rules: list[dict] | No
 
     Firewall unreadable => unknown, not silence. Loopback/tailscale-only binds
     are ignored. A wide bind with deny default and no explicit rule is INFO;
-    allow default is WARNING.
+    allow default is WARNING. Listeners unreadable => an explicit unknown
+    finding, never a clean report.
     """
     if listeners is None:
-        return []
+        return [Finding(
+            check="network.listeners_unreadable",
+            severity=Severity.WARNING,
+            message=(
+                "Listening sockets could not be read (no working `ss` and no "
+                "/proc/net/tcp*), so network exposure is unknown"
+            ),
+            remedy="Install iproute2 (ss), or run on a Linux host with /proc mounted.",
+            evidence={"source": "listening sockets"},
+        )]
     if rules is None or default_incoming is None:
         return [Finding(
             check="network.firewall_unreadable",

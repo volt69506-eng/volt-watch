@@ -113,6 +113,7 @@ still works exactly as before.
 | `tailscale.backend` | critical | Backend state is `NeedsLogin`, `Stopped`, `NoState` or `Starting` |
 | `network.listener_wide_bind` | info / warning | A non-SSH service listens on 0.0.0.0/::; warning when firewall default allows, info when deny-default protects it but bind is wider than needed |
 | `network.firewall_unreadable` | warning | Firewall state could not be read, so listener exposure is unknown |
+| `network.listeners_unreadable` | warning | Neither `ss` nor `/proc/net/tcp*` could be read, so listening sockets are unknown |
 | `time.unsynchronised` | warning | The host's clock is not being synchronised |
 | `disk.space_low` | warning / critical | The root filesystem is running out of space (90%) or inodes (95%), and critical at 95% / 99% |
 | `systemd.failed` | warning / critical | A systemd unit's last run failed; critical when the unit is one whose loss makes the host unreachable |
@@ -147,7 +148,7 @@ unread firewall looks exactly like a firewall with no SSH rules.
 |---|---|---|---|
 | `sshd.*` | partial | **yes** | reads `ufw status verbose`, a root-only wrapper on Arch/Omarchy |
 | `firewall.*` | partial | **yes** | reads the same `ufw status verbose` default-policy line |
-| `network.*` | partial | **yes** | reads listening sockets via `ss` and firewall state; firewall unreadable is reported as `network.firewall_unreadable` |
+| `network.*` | partial | **yes** | reads listening sockets via `ss`, falling back to `/proc/net/tcp*`; reads firewall state; an unreadable source is reported as `network.listeners_unreadable` / `network.firewall_unreadable` |
 | `security.*` | partial | **yes** | reads `/etc/shadow` and sudoers; an unprivileged run reports unknown/degraded findings instead of guessing |
 | `config.*` | partial | **yes** | walks `/etc` for `*.pacnew`/`*.pacsave` and world-writable paths; an unreadable subtree makes the scan unknown |
 | `auditor.degraded` | yes | no | summarizes readers that could not run, without another privileged read |

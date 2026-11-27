@@ -10,9 +10,13 @@ import glob
 import json
 import os
 import re
+import socket
 import stat
 import subprocess
 from pathlib import Path
+
+# Reader seam: tests point this at a fake /proc tree. Production never changes it.
+PROC_ROOT = Path("/proc")
 
 # ufw rule rows have a fixed Action column, but the To column before it may be
 # one token ("22/tcp") or two ("172.17.0.1 53/udp"). Anchor on the action.
@@ -1046,19 +1050,76 @@ def _parse_ss_listeners(output: str) -> list[dict]:
     return out
 
 
+def _proc_ip(hex_address: str, is_ipv6: bool) -> str:
+    """Decode /proc/net's hex address (host byte order) into dotted/quad notation."""
+    raw = bytes.fromhex(hex_address)
+    if not is_ipv6:
+        return socket.inet_ntop(socket.AF_INET, raw[::-1])
+    # IPv6 is printed as eight little-endian 32-bit words.
+    ordered = b"".join(raw[i:i + 4][::-1] for i in range(0, 16, 4))
+    return socket.inet_ntop(socket.AF_INET6, ordered)
+
+
+def _parse_proc_net_listeners(proc_root: Path | None = None) -> list[dict]:
+    """Read LISTEN sockets from /proc/net/{tcp,tcp6,udp,udp6}.
+
+    A last-resort reader for hosts without iproute2. It returns the same shape
+    as :func:`_parse_ss_listeners`, with an empty process name: /proc does not
+    tell us which binary owns a socket without an inode-to-fd lookup, and a
+    guess would be worse than an honest blank.
+    """
+    root = proc_root if proc_root is not None else PROC_ROOT
+    listeners = []
+    for proto, tables in (("tcp", ("tcp", "tcp6")), ("udp", ("udp", "udp6"))):
+        for table in tables:
+            try:
+                text = (root / table).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line in text.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 4 or ":" not in parts[1]:
+                    continue
+                if proto == "tcp" and parts[3] != "0A":  # TCP_LISTEN
+                    continue
+                hex_addr, hex_port = parts[1].rsplit(":", 1)
+                try:
+                    port = int(hex_port, 16)
+                    address = _proc_ip(hex_addr, table.endswith("6"))
+                except (ValueError, OSError):
+                    continue
+                listeners.append({
+                    "address": address,
+                    "port": port,
+                    "proto": proto,
+                    "process": "",
+                })
+    seen = set()
+    out = []
+    for listener in listeners:
+        key = (listener["address"], listener["port"], listener["proto"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(listener)
+    return out
+
+
 def listening_ports() -> list[dict] | None:
     """Return listening TCP/UDP sockets.
 
-    Uses `ss -tulpnH`. None means the reader could not run. Process names may be
+    Prefers `ss -tulpnH`; falls back to /proc/net when `ss` is missing or
+    fails. ``None`` means *both* sources were unavailable, which the check
+    reports as an unknown rather than as a clean host. Process names may be
     missing without root; sockets are still reported.
     """
     try:
         done = _run(["ss", "-tulpnH"])
     except (OSError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0:
-        return None
-    return _parse_ss_listeners(done.stdout)
+        done = None
+    if done is not None and done.returncode == 0:
+        return _parse_ss_listeners(done.stdout)
+    return _parse_proc_net_listeners() or None
 
 
 def reboot_required_markers() -> list[str]:
