@@ -162,3 +162,68 @@ def test_auditor_security_group_runs_sensitive_paths(monkeypatch):
     }])
     checks = [f.check for f in auditor.audit(only="security")]
     assert "security.sensitive_path_permissions" in checks
+
+
+def test_ssh_user_private_key_too_permissive_is_critical():
+    rec = {
+        "path": "/home/alice/.ssh/id_ed25519",
+        "exists": True,
+        "mode": "0o644",
+        "uid": 1000,
+        "gid": 1000,
+        "owner": "alice",
+        "group": "alice",
+        "readable": True,
+        "expected": "0600 owner-owned",
+    }
+    findings = sensitive_path_permissions_check([rec])
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.CRITICAL
+
+
+def test_ssh_user_private_key_group_readable_is_critical():
+    rec = {
+        "path": "/home/alice/.ssh/id_rsa",
+        "exists": True,
+        "mode": "0o640",
+        "uid": 1000,
+        "gid": 1000,
+        "owner": "alice",
+        "group": "alice",
+        "readable": True,
+        "expected": "0600 owner-owned",
+    }
+    findings = sensitive_path_permissions_check([rec])
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.CRITICAL
+
+
+def test_ssh_user_private_key_safe_permissions_no_finding():
+    rec = {
+        "path": "/home/alice/.ssh/id_ed25519",
+        "exists": True,
+        "mode": "0o600",
+        "uid": 1000,
+        "gid": 1000,
+        "owner": "alice",
+        "group": "alice",
+        "readable": True,
+        "expected": "0600 owner-owned",
+    }
+    assert sensitive_path_permissions_check([rec]) == []
+
+
+def test_collector_user_ssh_keys_pub_files_ignored(tmp_path, monkeypatch):
+    from volt_watch import collector
+
+    ssh_dir = tmp_path / "home" / "alice" / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "id_ed25519").write_bytes(b"x")
+    os.chmod(ssh_dir / "id_ed25519", 0o600)
+    (ssh_dir / "id_ed25519.pub").write_bytes(b"x")
+    monkeypatch.setattr(collector, "SENSITIVE_PATH_SPECS", [
+        {"path": str(tmp_path / "home" / "*" / ".ssh" / "id_*"), "kind": "ssh_user_private_key"},
+    ])
+    records = collector.sensitive_path_records()
+    assert [r["path"] for r in records] == [str(ssh_dir / "id_ed25519")]
+    assert records[0]["kind"] == "ssh_user_private_key"
