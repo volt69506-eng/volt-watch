@@ -11,6 +11,7 @@ from .checks import (
     firewall_default_check,
     firewall_disabled_check,
     kernel_reboot_check,
+    reboot_required_check,
     listener_exposure_check,
     orphaned_packages_check,
     passwordless_sudo_check,
@@ -71,7 +72,10 @@ CHECKS: dict[str, list] = {
     "time": [lambda: clock_check(collector.clock_state())],
     "disk": [lambda: disk_space_check(collector.disk_usage())],
     "systemd": [lambda: failed_units_check(collector.failed_units())],
-    "kernel": [lambda: kernel_reboot_check(collector.kernel_versions())],
+    "kernel": [
+        lambda: kernel_reboot_check(collector.kernel_versions()),
+        lambda: reboot_required_check(collector.reboot_required_markers()),
+    ],
     "packages": [
         lambda: pending_updates_check(collector.pending_update_count()),
         lambda: orphaned_packages_check(collector.orphaned_packages()),

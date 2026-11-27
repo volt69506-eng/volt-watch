@@ -36,6 +36,11 @@ SENSITIVE_PATH_SPECS = [
 SUDOERS_PATH = "/etc/sudoers"
 SUDOERS_D_GLOB = "/etc/sudoers.d/*"
 
+REBOOT_REQUIRED_PATHS = [
+    "/run/reboot-required",
+    "/var/run/reboot-required",
+]
+
 # A local CLI that answers from a socket or a file needs well under a second.
 # Five seconds is generous for every reader here — `ufw status verbose`,
 # `tailscale status --json`, `sshd -T`, `setpci`, `systemctl` — and a command
@@ -1038,3 +1043,20 @@ def listening_ports() -> list[dict] | None:
     if done.returncode != 0:
         return None
     return _parse_ss_listeners(done.stdout)
+
+
+def reboot_required_markers() -> list[str]:
+    """Return reboot-required marker files that exist.
+
+    Missing files mean no finding; unreadable existing files are still reported
+    as present by path (caller can treat as signal). This is intentionally
+    narrow and cross-distro best-effort.
+    """
+    found = []
+    for path in REBOOT_REQUIRED_PATHS:
+        try:
+            if os.path.exists(path):
+                found.append(path)
+        except OSError:
+            continue
+    return found

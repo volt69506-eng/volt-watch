@@ -6,6 +6,7 @@ concatenate results without guarding.
 """
 
 import ipaddress
+import os
 import re
 
 from .collector import normalize_release
@@ -1052,3 +1053,31 @@ def listener_exposure_check(listeners: list[dict] | None, rules: list[dict] | No
             evidence={"address": addr, "port": port, "proto": proto, "process": l.get("process", "")},
         ))
     return findings
+
+
+def reboot_required_check(markers: list[str] | None) -> list:
+    """Report reboot-required marker files present on the host.
+
+    Marker files are used by some distros (e.g. Debian/Ubuntu) to signal that
+    a reboot is needed. Missing markers mean no finding.
+    """
+    if not markers:
+        return []
+    present = []
+    for m in markers:
+        try:
+            if os.path.exists(str(m)):
+                present.append(str(m))
+        except OSError:
+            continue
+    if not present:
+        return []
+    return [
+        Finding(
+            check="system.reboot_required",
+            severity=Severity.WARNING,
+            message=f"Reboot-required marker present: {', '.join(present)}",
+            remedy="Schedule a reboot when convenient to apply pending system changes.",
+            evidence={"markers": present},
+        )
+    ]
