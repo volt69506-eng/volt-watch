@@ -690,6 +690,42 @@ def empty_password_accounts(path: str = "/etc/shadow") -> list | None:
     return accounts
 
 
+def uid0_accounts(path: str = "/etc/passwd") -> list[dict] | None:
+    """Return every UID 0 account as name/uid/home/shell records.
+
+    ``/etc/passwd`` is world-readable. Only those four fields leave this
+    reader: the password field and the GECOS comment are deliberately dropped,
+    so an evidence payload can never carry a hash. A missing file yields ``[]``
+    (a host without an account database has no extra root accounts); an
+    existing but unreadable file yields ``None``, which the check reports as an
+    unknown state rather than as a clean database.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return None
+
+    accounts = []
+    for line in text.splitlines():
+        fields = line.split(":")
+        if len(fields) < 7 or not fields[0].strip():
+            continue
+        try:
+            uid = int(fields[2])
+        except ValueError:
+            continue
+        if uid == 0:
+            accounts.append({
+                "name": fields[0].strip(),
+                "uid": uid,
+                "home": fields[5],
+                "shell": fields[6],
+            })
+    return accounts
+
+
 # Bounds for the config-drift walk. `/etc` is shallow in practice; the depth
 # keeps a stray mount point or symlinked tree from turning the audit into a
 # filesystem crawl, and the entry cap bounds what a mass replacement can put

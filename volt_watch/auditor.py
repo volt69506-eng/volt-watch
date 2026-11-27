@@ -24,6 +24,7 @@ from .checks import (
     tailscale_exposure_check,
     tailscale_check,
     tailscale_ssh_check,
+    uid0_accounts_check,
     world_writable_etc_check,
 )
 
@@ -72,6 +73,7 @@ CHECKS: dict[str, list] = {
     ],
     "security": [
         lambda: empty_password_accounts_check(collector.empty_password_accounts()),
+        lambda: uid0_accounts_check(collector.uid0_accounts()),
         lambda: sensitive_path_permissions_check(collector.sensitive_path_records()),
         lambda: passwordless_sudo_check(collector.passwordless_sudo_rules()),
         lambda: sensitive_runtime_world_writable_check(*collector.sensitive_runtime_world_writable()),

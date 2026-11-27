@@ -683,6 +683,54 @@ def empty_password_accounts_check(accounts: list | None) -> list:
     ]
 
 
+# The only account allowed to have UID 0. Service placeholders keep their own
+# UIDs; anything else at UID 0 is a second root account.
+UID0_ALLOWLIST = {"root"}
+
+
+def uid0_accounts_check(accounts: list | None) -> list:
+    """Report every account with UID 0 besides ``root``.
+
+    ``accounts`` comes from :func:`collector.uid0_accounts`. ``None`` means the
+    database existed but could not be read: that is a coverage warning, not a
+    clean host. Each finding names one account and carries only the four
+    non-sensitive fields the reader returned.
+    """
+    if accounts is None:
+        return [
+            Finding(
+                check="security.passwd_unreadable",
+                severity=Severity.WARNING,
+                message="The account database could not be read, so UID 0 accounts are unknown",
+                remedy="Run the auditor as root, or grant read access to /etc/passwd.",
+                evidence={"path": "/etc/passwd"},
+            )
+        ]
+
+    findings = []
+    for account in accounts:
+        name = account.get("name", "")
+        if name in UID0_ALLOWLIST:
+            continue
+        findings.append(Finding(
+            check="security.uid0_account",
+            severity=Severity.CRITICAL,
+            message=f"Account {name!r} also has UID 0, giving it full root privileges",
+            remedy=(
+                "Delete the account (`userdel <name>`) or assign it a new unique "
+                "UID (`usermod -u <new-uid> <name>`) and fix file ownership "
+                "afterwards. A second UID 0 account is a common persistence path."
+            ),
+            evidence={
+                "name": name,
+                "uid": account.get("uid"),
+                "home": account.get("home"),
+                "shell": account.get("shell"),
+            },
+        ))
+    return findings
+
+
 def config_drift_check(drift: dict | None) -> list:
     """Report config files pacman left behind for an administrator to review.
 
