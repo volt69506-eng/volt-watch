@@ -41,6 +41,32 @@ def tailscale_check(status: dict) -> list:
     return findings
 
 
+def tailscale_ssh_check(status: dict | None) -> list:
+    """Report when Tailscale SSH is enabled on this node.
+
+    Tailscale SSH can be a deliberate access path, but it changes the SSH trust
+    boundary. We report it as INFO for visibility; disabled or unknown is no
+    finding.
+    """
+    if not isinstance(status, dict):
+        return []
+    self_node = status.get("Self")
+    if not isinstance(self_node, dict):
+        return []
+    run_ssh = self_node.get("RunSSH")
+    if run_ssh is not True:
+        return []
+    return [
+        Finding(
+            check="tailscale.ssh_enabled",
+            severity=Severity.INFO,
+            message="Tailscale SSH is enabled on this node",
+            remedy="If unintended, disable Tailscale SSH in tailnet ACL/policy or via `tailscale set --ssh=false` as appropriate.",
+            evidence={"enabled": True, "source": "status.Self.RunSSH"},
+        )
+    ]
+
+
 def _is_private_source(source: str) -> bool:
     """Return True when a firewall source cannot reach the host from the internet.
 

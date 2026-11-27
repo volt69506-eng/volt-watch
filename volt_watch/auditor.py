@@ -22,13 +22,18 @@ from .checks import (
     sshd_config_check,
     tailscale_exposure_check,
     tailscale_check,
+    tailscale_ssh_check,
     world_writable_etc_check,
 )
 
 
 def _tailscale() -> list:
     status = collector.tailscale_status()
-    return tailscale_check(status) if status is not None else []
+    if status is None:
+        return []
+    findings = tailscale_check(status)
+    findings.extend(tailscale_ssh_check(status))
+    return findings
 
 
 def _ssh_exposure() -> list:

@@ -102,6 +102,7 @@ still works exactly as before.
 | `security.shadow_unreadable` | warning | `/etc/shadow` could not be read, so passwordless accounts are unknown |
 | `auditor.degraded` | warning | Some readers could not run, so the report is incomplete |
 | `tailscale.exposed` | critical | A port is published to the internet with `tailscale funnel`, bypassing the firewall |
+| `tailscale.ssh_enabled` | info | Tailscale SSH is enabled on this node (visible posture signal) |
 | `tailscale.published` | info | A port is published to the tailnet with `tailscale serve` |
 | `tailscale.backend` | critical | Backend state is `NeedsLogin`, `Stopped`, `NoState` or `Starting` |
 | `network.listener_wide_bind` | info / warning | A non-SSH service listens on 0.0.0.0/::; warning when firewall default allows, info when deny-default protects it but bind is wider than needed |
