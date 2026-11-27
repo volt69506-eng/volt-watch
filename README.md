@@ -37,6 +37,19 @@ Each of these is invisible from the desktop and obvious in hindsight.
 pip install volt-watch          # or: pipx install volt-watch
 ```
 
+## Development & CI
+
+Tests run in GitHub Actions on Python 3.10-3.14 (`.github/workflows/ci.yml`) for pushes and pull requests.
+
+```bash
+python -m pip install --upgrade pip pytest
+python -m pip install -e .
+python -m pytest -q
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for TDD expectations and security reporting guidance.
+
+
 Needs Python 3.10+. Reads `tailscale`, `ufw`, `setpci` and `systemctl` from the
 host; a missing tool is treated as "not applicable" rather than as an error.
 
@@ -95,19 +108,26 @@ still works exactly as before.
 | `security.shadow_unreadable` | warning | `/etc/shadow` could not be read, so passwordless accounts are unknown |
 | `auditor.degraded` | warning | Some readers could not run, so the report is incomplete |
 | `tailscale.exposed` | critical | A port is published to the internet with `tailscale funnel`, bypassing the firewall |
+| `tailscale.ssh_enabled` | info | Tailscale SSH is enabled on this node (visible posture signal) |
 | `tailscale.published` | info | A port is published to the tailnet with `tailscale serve` |
 | `tailscale.backend` | critical | Backend state is `NeedsLogin`, `Stopped`, `NoState` or `Starting` |
+| `network.listener_wide_bind` | info / warning | A non-SSH service listens on 0.0.0.0/::; warning when firewall default allows, info when deny-default protects it but bind is wider than needed |
+| `network.firewall_unreadable` | warning | Firewall state could not be read, so listener exposure is unknown |
 | `time.unsynchronised` | warning | The host's clock is not being synchronised |
 | `disk.space_low` | warning / critical | The root filesystem is running out of space (90%) or inodes (95%), and critical at 95% / 99% |
 | `systemd.failed` | warning / critical | A systemd unit's last run failed; critical when the unit is one whose loss makes the host unreachable |
 | `kernel.pending_reboot` | warning | A kernel is installed that is newer than the running one |
+| `system.reboot_required` | warning | Reboot-required marker file present (e.g. `/run/reboot-required`) |
 | `packages.orphaned` | info / warning | Installed packages nothing requires; a kernel or boot-path package is a warning |
 | `config.drift` | warning | A config file replaced by pacman (`.pacnew`/`.pacsave`) awaits review |
 | `config.drift_unknown` | warning | The `/etc` scan could not be completed, so replaced config files are unknown |
 | `config.world_writable` | critical / warning | A file or directory under `/etc` is world-writable; critical under `ssh/`, `sudoers.d/`, `pam.d/`, `systemd/system/` or `cron.d*` |
 | `config.world_writable_unknown` | warning | The `/etc` scan could not be completed, so world-writable paths are unknown |
 | `security.sensitive_path_permissions` | critical / warning | Sensitive local secret/state paths (LUKS keyfile, SSH host private keys, docker socket, tailscale state) have unsafe permissions |
+| `security.world_writable_sensitive_runtime` | critical | World-writable entry in a sensitive runtime directory (bounded top-level scan) |
+| `security.sensitive_runtime_unknown` | warning | Could not inspect a sensitive runtime directory |
 | `security.sensitive_path_unknown` | warning | A sensitive path exists but could not be stat/read, so its permissions are unknown |
+| `security.passwordless_sudo` | critical / warning | A sudoers rule grants NOPASSWD; critical for full `ALL`, warning for narrow/expired grants |
 | `firewall.disabled` | critical | UFW is installed but inactive, so host firewall rules are not filtering incoming connections |
 | `firewall.default_allow` | critical / warning | The firewall default incoming policy is `allow`, or another policy the auditor cannot classify as safe |
 | `packages.outdated` | info / warning / critical | 1–20, 21–100, over 100 pending package updates |
@@ -127,7 +147,8 @@ unread firewall looks exactly like a firewall with no SSH rules.
 |---|---|---|---|
 | `sshd.*` | partial | **yes** | reads `ufw status verbose`, a root-only wrapper on Arch/Omarchy |
 | `firewall.*` | partial | **yes** | reads the same `ufw status verbose` default-policy line |
-| `security.*` | partial | **yes** | reads `/etc/shadow`; an unprivileged run reports `security.shadow_unreadable` instead of guessing |
+| `network.*` | partial | **yes** | reads listening sockets via `ss` and firewall state; firewall unreadable is reported as `network.firewall_unreadable` |
+| `security.*` | partial | **yes** | reads `/etc/shadow` and sudoers; an unprivileged run reports unknown/degraded findings instead of guessing |
 | `config.*` | partial | **yes** | walks `/etc` for `*.pacnew`/`*.pacsave` and world-writable paths; an unreadable subtree makes the scan unknown |
 | `auditor.degraded` | yes | no | summarizes readers that could not run, without another privileged read |
 | `time.unsynchronised` | yes | no | reads synchronization state with `timedatectl show` and `systemctl is-active` |
@@ -137,6 +158,7 @@ unread firewall looks exactly like a firewall with no SSH rules.
 | `disk.space_low` | yes | no | `statvfs` on the root filesystem, standard library only |
 | `systemd.failed` | partial | **yes** | `systemctl --failed` lists system units for everyone, but a root-only unit can be hidden from a user manager |
 | `kernel.pending_reboot` | yes | no | `uname -r` and `pacman -Q`; no kernel package on a non-Arch host is not a finding |
+| `system.reboot_required` | yes | no | checks known reboot marker paths; missing markers are not findings |
 | `tailscale.*` | yes | no | reads the local Tailscale socket |
 | `power.restore_disabled` | partial | **yes** | `setpci` reads PCI config space, which is root-only |
 | `power.register_unreadable` | yes | no | reports the access failure rather than hiding it |

@@ -33,6 +33,18 @@ SENSITIVE_PATH_SPECS = [
     {"path": "/etc/ssh/ssh_host_*_key", "kind": "ssh_host_private_key"},
 ]
 
+SUDOERS_PATH = "/etc/sudoers"
+SUDOERS_D_GLOB = "/etc/sudoers.d/*"
+
+REBOOT_REQUIRED_PATHS = [
+    "/run/reboot-required",
+    "/var/run/reboot-required",
+]
+
+SENSITIVE_RUNTIME_DIRS = [
+    "/var/lib/tailscale",
+]
+
 # A local CLI that answers from a socket or a file needs well under a second.
 # Five seconds is generous for every reader here — `ufw status verbose`,
 # `tailscale status --json`, `sshd -T`, `setpci`, `systemctl` — and a command
@@ -866,3 +878,246 @@ def sensitive_path_records() -> list[dict]:
             "kind": spec["kind"],
         })
     return records
+
+
+_NOTAFTER_RE = re.compile(r"\bNOTAFTER=(\d{14}Z)\b")
+_NOPASSWD_RE = re.compile(r"\bNOPASSWD\s*:")
+
+
+def _sudoers_includes(text: str) -> list[str]:
+    includes = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            # #includedir/#include directives start with # but are directives
+            if stripped.lower().startswith("#includedir"):
+                pat = stripped.split(None, 1)[1].strip() if len(stripped.split(None, 1)) > 1 else ""
+                if pat:
+                    for match in sorted(glob.glob(pat + "/*")):
+                        if os.path.basename(match).startswith(".") or match.endswith("~"):
+                            continue
+                        includes.append(match)
+            elif stripped.lower().startswith("#include"):
+                pat = stripped.split(None, 1)[1].strip() if len(stripped.split(None, 1)) > 1 else ""
+                if pat:
+                    for match in sorted(glob.glob(pat)):
+                        includes.append(match)
+            continue
+    return includes
+
+
+def _parse_notafter(value: str) -> str | None:
+    # value like 20261123234621Z
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.strptime(value, "%Y%m%d%H%M%SZ").replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    except Exception:
+        return None
+
+
+def _is_notafter_expired(value: str | None, now=None) -> bool | None:
+    if not value:
+        return None
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.strptime(value, "%Y%m%d%H%M%SZ").replace(tzinfo=timezone.utc)
+        if now is None:
+            now = datetime.now(timezone.utc)
+        return dt <= now
+    except Exception:
+        return None
+
+
+def _parse_sudoers_rules(text: str, source: str, now=None) -> list[dict]:
+    rules = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "NOPASSWD" not in line.upper():
+            continue
+        # skip Defaults lines
+        if line.lower().startswith("defaults"):
+            continue
+        # very small parser: split at first '=' before command spec? sudoers rules usually: user host=(runas) tags: commands
+        # find commands after last ':'
+        if ":" not in line:
+            continue
+        left, commands = line.rsplit(":", 1)
+        commands = commands.strip()
+        if not commands:
+            continue
+        upper_left = left.upper()
+        if "NOPASSWD" not in upper_left and "!AUTHENTICATE" not in upper_left:
+            continue
+        notafter_m = _NOTAFTER_RE.search(line)
+        notafter = notafter_m.group(1) if notafter_m else None
+        expired = _is_notafter_expired(notafter, now=now)
+        # user is first token
+        user = line.split()[0]
+        rules.append({
+            "file": source,
+            "user": user,
+            "commands": commands,
+            "notafter": notafter,
+            "notafter_expired": expired,
+            "nopasswd": True,
+        })
+    return rules
+
+
+def passwordless_sudo_rules(now=None) -> list[dict] | None:
+    """Parse sudoers for NOPASSWD rules.
+
+    Intentionally small line-oriented parser; not a full sudoers grammar.
+    Returns None when sudoers cannot be read (unknown), [] when no sudoers
+    exists on a non-Linux host-like layout? Missing /etc/sudoers is treated as
+    not a finding by returning [].
+    """
+    paths = []
+    try:
+        if not os.path.exists(SUDOERS_PATH):
+            return []
+        with open(SUDOERS_PATH, "r", encoding="utf-8", errors="replace") as f:
+            main_text = f.read()
+    except OSError:
+        return None
+
+    texts = [(SUDOERS_PATH, main_text)]
+    for inc in _sudoers_includes(main_text):
+        try:
+            with open(inc, "r", encoding="utf-8", errors="replace") as f:
+                texts.append((inc, f.read()))
+        except OSError:
+            # unreadable include: return None? better mark unknown overall
+            return None
+
+    rules = []
+    for source, text in texts:
+        rules.extend(_parse_sudoers_rules(text, source, now=now))
+    return rules
+
+
+def _parse_ss_listeners(output: str) -> list[dict]:
+    listeners = []
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        # ss -tulpnH: Netid State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+        proto = parts[0].lower()
+        if proto not in {"tcp", "udp"}:
+            continue
+        local = parts[4]
+        if ":" not in local:
+            continue
+        addr, port = local.rsplit(":", 1)
+        addr = addr.strip("[]")
+        if addr.startswith("%", 0):
+            pass
+        # strip zone id
+        if "%" in addr:
+            addr = addr.split("%", 1)[0]
+        # process field like users:(("name",pid=...,fd=...))
+        process = ""
+        m = re.search(r'users:\(\("([^"]+)"', line)
+        if m:
+            process = m.group(1)
+        try:
+            port_i = int(port)
+        except ValueError:
+            continue
+        listeners.append({
+            "address": addr,
+            "port": port_i,
+            "proto": proto,
+            "process": process,
+        })
+    # dedupe
+    seen = set()
+    out = []
+    for l in listeners:
+        key = (l["address"], l["port"], l["proto"], l["process"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(l)
+    return out
+
+
+def listening_ports() -> list[dict] | None:
+    """Return listening TCP/UDP sockets.
+
+    Uses `ss -tulpnH`. None means the reader could not run. Process names may be
+    missing without root; sockets are still reported.
+    """
+    try:
+        done = _run(["ss", "-tulpnH"])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return _parse_ss_listeners(done.stdout)
+
+
+def reboot_required_markers() -> list[str]:
+    """Return reboot-required marker files that exist.
+
+    Missing files mean no finding; unreadable existing files are still reported
+    as present by path (caller can treat as signal). This is intentionally
+    narrow and cross-distro best-effort.
+    """
+    found = []
+    for path in REBOOT_REQUIRED_PATHS:
+        try:
+            if os.path.exists(path):
+                found.append(path)
+        except OSError:
+            continue
+    return found
+
+
+def sensitive_runtime_dirs() -> list[str]:
+    """Return existing sensitive runtime dirs to scan (bounded, explicit)."""
+    found = []
+    for path in SENSITIVE_RUNTIME_DIRS:
+        try:
+            if os.path.isdir(path):
+                found.append(path)
+        except OSError:
+            continue
+    return found
+
+
+def sensitive_runtime_world_writable(dirs: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+    """Find world-writable entries in sensitive runtime dirs.
+
+    Bounded scan: top-level entries only (no recursive walk) to avoid noise and
+    load on large dirs. Returns (records, errors).
+    Each record: {path, mode, is_dir}. Errors: {path, error}.
+    Missing dirs are ignored (no finding).
+    """
+    records = []
+    errors = []
+    for base in (dirs or sensitive_runtime_dirs()):
+        try:
+            if not os.path.exists(base):
+                continue
+            with os.scandir(base) as it:
+                for entry in it:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        errors.append({"path": entry.path, "error": str(exc)})
+                        continue
+                    mode = st.st_mode
+                    if mode & 0o002:
+                        records.append({
+                            "path": entry.path,
+                            "mode": oct(mode & 0o777),
+                            "is_dir": entry.is_dir(follow_symlinks=False),
+                        })
+        except OSError as exc:
+            errors.append({"path": base, "error": str(exc)})
+    return records, errors

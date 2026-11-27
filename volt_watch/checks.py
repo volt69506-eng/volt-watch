@@ -6,6 +6,7 @@ concatenate results without guarding.
 """
 
 import ipaddress
+import os
 import re
 
 from .collector import normalize_release
@@ -38,6 +39,32 @@ def tailscale_check(status: dict) -> list:
         )
 
     return findings
+
+
+def tailscale_ssh_check(status: dict | None) -> list:
+    """Report when Tailscale SSH is enabled on this node.
+
+    Tailscale SSH can be a deliberate access path, but it changes the SSH trust
+    boundary. We report it as INFO for visibility; disabled or unknown is no
+    finding.
+    """
+    if not isinstance(status, dict):
+        return []
+    self_node = status.get("Self")
+    if not isinstance(self_node, dict):
+        return []
+    run_ssh = self_node.get("RunSSH")
+    if run_ssh is not True:
+        return []
+    return [
+        Finding(
+            check="tailscale.ssh_enabled",
+            severity=Severity.INFO,
+            message="Tailscale SSH is enabled on this node",
+            remedy="If unintended, disable Tailscale SSH in tailnet ACL/policy or via `tailscale set --ssh=false` as appropriate.",
+            evidence={"enabled": True, "source": "status.Self.RunSSH"},
+        )
+    ]
 
 
 def _is_private_source(source: str) -> bool:
@@ -908,7 +935,6 @@ def sensitive_path_permissions_check(records: list[dict] | None) -> list:
 
     findings = []
     if bad:
-        # report one finding per path? simpler one finding listing paths; severity max
         severity = Severity.CRITICAL if any(s is Severity.CRITICAL for s, _, _ in bad) else Severity.WARNING
         evidence_paths = [{
             "path": r.get("path"),
@@ -935,5 +961,181 @@ def sensitive_path_permissions_check(records: list[dict] | None) -> list:
             message=f"Sensitive path exists but could not be read: {rec.get('path')}",
             remedy="Run the auditor with sufficient privileges to stat sensitive paths.",
             evidence={"path": rec.get("path"), "expected": rec.get("expected")},
+        ))
+    return findings
+
+
+def passwordless_sudo_check(rules: list[dict] | None) -> list:
+    """Report passwordless sudo grants.
+
+    ``None`` means sudoers could not be read (unknown); not a finding here.
+    Missing sudoers is represented as [] by collector and is not a finding.
+    """
+    if not rules:
+        return []
+    findings = []
+    for rule in rules:
+        if not rule.get("nopasswd"):
+            continue
+        commands = str(rule.get("commands", "")).strip()
+        expired = bool(rule.get("notafter_expired"))
+        critical = commands.upper() == "ALL" and not expired
+        severity = Severity.CRITICAL if critical else Severity.WARNING
+        notafter = rule.get("notafter")
+        deadline = f" (NOTAFTER {notafter}, deadline passed)" if expired and notafter else (f" (NOTAFTER {notafter})" if notafter else "")
+        findings.append(Finding(
+            check="security.passwordless_sudo",
+            severity=severity,
+            message=(
+                f"Passwordless sudo grant for {rule.get('user', '?')} in {rule.get('file', '?')}: "
+                f"NOPASSWD {commands}{deadline}"
+            ),
+            remedy="Remove or narrow the NOPASSWD rule; require authentication for full sudo where possible.",
+            evidence={
+                "file": rule.get("file"),
+                "user": rule.get("user"),
+                "commands": commands,
+                "notafter": notafter,
+                "expired": expired,
+            },
+        ))
+    return findings
+
+
+def _listener_is_wide_bind(addr: str) -> bool:
+    return addr in {"0.0.0.0", "::", "*"}
+
+
+def _listener_is_loopback(addr: str) -> bool:
+    try:
+        return ipaddress.ip_address(addr).is_loopback
+    except ValueError:
+        return addr in {"localhost"}
+
+
+def _listener_is_tailscale(addr: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+        return ip in ipaddress.ip_network("100.64.0.0/10") or ip in ipaddress.ip_network("fd7a:115c:a1e0::/48")
+    except ValueError:
+        return False
+
+
+def _port_covered_by_tailscale_only(port: int, proto: str, rules: list[dict]) -> bool:
+    token = f"{port}/{proto}"
+    token_any = str(port)
+    for rule in rules:
+        if rule.get("action") != "ALLOW":
+            continue
+        rp = str(rule.get("port", ""))
+        if rp not in {token, token_any}:
+            continue
+        iface = rule.get("interface", "")
+        src = str(rule.get("source", "")).lower()
+        if iface == "tailscale0" or "tailscale" in src:
+            # if rule is scoped to tailscale interface, consider covered
+            return True
+    return False
+
+
+def listener_exposure_check(listeners: list[dict] | None, rules: list[dict] | None, default_incoming: str | None = "deny") -> list:
+    """Report non-loopback wide-bind listeners.
+
+    Firewall unreadable => unknown, not silence. Loopback/tailscale-only binds
+    are ignored. A wide bind with deny default and no explicit rule is INFO;
+    allow default is WARNING.
+    """
+    if listeners is None:
+        return []
+    if rules is None or default_incoming is None:
+        return [Finding(
+            check="network.firewall_unreadable",
+            severity=Severity.WARNING,
+            message="Firewall state could not be read, so listener exposure is unknown",
+            remedy="Run as root or grant access to firewall status commands.",
+            evidence={"default_incoming": default_incoming},
+        )]
+    findings = []
+    for l in listeners:
+        addr = str(l.get("address", ""))
+        port = int(l.get("port", 0))
+        proto = str(l.get("proto", "tcp")).lower()
+        if port == 22 and proto == "tcp":
+            continue  # ssh_exposure_check owns SSH
+        if _listener_is_loopback(addr) or _listener_is_tailscale(addr):
+            continue
+        if not _listener_is_wide_bind(addr):
+            continue
+        if _port_covered_by_tailscale_only(port, proto, rules):
+            continue
+        if default_incoming == "allow":
+            severity = Severity.WARNING
+            msg = f"Listener {proto}/{port} binds {addr} and firewall default allows incoming"
+        else:
+            severity = Severity.INFO
+            msg = f"Listener {proto}/{port} binds {addr}; firewall default denies but port is not explicitly restricted"
+        findings.append(Finding(
+            check="network.listener_wide_bind",
+            severity=severity,
+            message=msg,
+            remedy="Bind the service to loopback/tailscale interface, or add a firewall rule restricting access (prefer tailscale0).",
+            evidence={"address": addr, "port": port, "proto": proto, "process": l.get("process", "")},
+        ))
+    return findings
+
+
+def reboot_required_check(markers: list[str] | None) -> list:
+    """Report reboot-required marker files present on the host.
+
+    Marker files are used by some distros (e.g. Debian/Ubuntu) to signal that
+    a reboot is needed. Missing markers mean no finding.
+    """
+    if not markers:
+        return []
+    present = []
+    for m in markers:
+        try:
+            if os.path.exists(str(m)):
+                present.append(str(m))
+        except OSError:
+            continue
+    if not present:
+        return []
+    return [
+        Finding(
+            check="system.reboot_required",
+            severity=Severity.WARNING,
+            message=f"Reboot-required marker present: {', '.join(present)}",
+            remedy="Schedule a reboot when convenient to apply pending system changes.",
+            evidence={"markers": present},
+        )
+    ]
+
+
+def sensitive_runtime_world_writable_check(records: list[dict] | None, errors: list[dict] | None = None) -> list:
+    """Report world-writable entries in sensitive runtime dirs.
+
+    Bounded/explicit scan; missing dirs yield no findings. Unreadable dirs are
+    surfaced as unknown warnings.
+    """
+    findings = []
+    for rec in (records or []):
+        path = str(rec.get("path", ""))
+        mode = rec.get("mode", "")
+        is_dir = bool(rec.get("is_dir"))
+        findings.append(Finding(
+            check="security.world_writable_sensitive_runtime",
+            severity=Severity.CRITICAL,
+            message=f"World-writable {'directory' if is_dir else 'file'} in sensitive runtime path: {path}",
+            remedy="Restrict permissions (remove world-writable bit) and investigate why it was writable.",
+            evidence={"path": path, "mode": mode, "is_dir": is_dir},
+        ))
+    for err in (errors or []):
+        findings.append(Finding(
+            check="security.sensitive_runtime_unknown",
+            severity=Severity.WARNING,
+            message=f"Could not inspect sensitive runtime path: {err.get('path', '')}",
+            remedy="Run with sufficient privileges to inspect sensitive runtime directories.",
+            evidence={"path": err.get("path", ""), "error": err.get("error", "")},
         ))
     return findings

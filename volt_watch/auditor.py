@@ -11,21 +11,30 @@ from .checks import (
     firewall_default_check,
     firewall_disabled_check,
     kernel_reboot_check,
+    reboot_required_check,
+    listener_exposure_check,
     orphaned_packages_check,
+    passwordless_sudo_check,
     pending_updates_check,
     power_restore_check,
     sensitive_path_permissions_check,
+    sensitive_runtime_world_writable_check,
     ssh_exposure_check,
     sshd_config_check,
     tailscale_exposure_check,
     tailscale_check,
+    tailscale_ssh_check,
     world_writable_etc_check,
 )
 
 
 def _tailscale() -> list:
     status = collector.tailscale_status()
-    return tailscale_check(status) if status is not None else []
+    if status is None:
+        return []
+    findings = tailscale_check(status)
+    findings.extend(tailscale_ssh_check(status))
+    return findings
 
 
 def _ssh_exposure() -> list:
@@ -54,14 +63,26 @@ CHECKS: dict[str, list] = {
         lambda: firewall_default_check(collector.ufw_default_incoming()),
         _ssh_exposure,
     ],
+    "network": [
+        lambda: listener_exposure_check(
+            collector.listening_ports(),
+            collector.ufw_rules(),
+            collector.ufw_default_incoming(),
+        ),
+    ],
     "security": [
         lambda: empty_password_accounts_check(collector.empty_password_accounts()),
         lambda: sensitive_path_permissions_check(collector.sensitive_path_records()),
+        lambda: passwordless_sudo_check(collector.passwordless_sudo_rules()),
+        lambda: sensitive_runtime_world_writable_check(*collector.sensitive_runtime_world_writable()),
     ],
     "time": [lambda: clock_check(collector.clock_state())],
     "disk": [lambda: disk_space_check(collector.disk_usage())],
     "systemd": [lambda: failed_units_check(collector.failed_units())],
-    "kernel": [lambda: kernel_reboot_check(collector.kernel_versions())],
+    "kernel": [
+        lambda: kernel_reboot_check(collector.kernel_versions()),
+        lambda: reboot_required_check(collector.reboot_required_markers()),
+    ],
     "packages": [
         lambda: pending_updates_check(collector.pending_update_count()),
         lambda: orphaned_packages_check(collector.orphaned_packages()),
