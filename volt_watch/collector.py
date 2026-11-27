@@ -35,6 +35,8 @@ SENSITIVE_PATH_SPECS = [
     {"path": "/var/lib/tailscale/tailscaled.state", "kind": "tailscale_state"},
     {"path": "/run/docker.sock", "kind": "docker_sock"},
     {"path": "/etc/ssh/ssh_host_*_key", "kind": "ssh_host_private_key"},
+    {"path": "/home/*/.ssh/id_*", "kind": "ssh_user_private_key"},
+    {"path": "/root/.ssh/id_*", "kind": "ssh_user_private_key"},
 ]
 
 SUDOERS_PATH = "/etc/sudoers"
@@ -802,6 +804,7 @@ def _sensitive_expected(kind: str) -> str:
         "tailscale_state": "not world-readable",
         "docker_sock": "root:docker 0660 or stricter",
         "ssh_host_private_key": "0600 root-owned",
+        "ssh_user_private_key": "0600 owner-owned",
     }.get(kind, "restricted")
 
 
@@ -812,6 +815,9 @@ def _expand_sensitive_specs(specs: list[dict]) -> list[dict]:
         matches = glob.glob(pattern)
         if matches:
             for match in sorted(matches):
+                if spec["kind"] == "ssh_user_private_key" and match.endswith(".pub"):
+                    # Public keys are not secrets; the id_* glob catches them.
+                    continue
                 expanded.append({"path": match, "kind": spec["kind"]})
         else:
             expanded.append({"path": pattern, "kind": spec["kind"]})
