@@ -64,6 +64,7 @@ $ volt-watch; echo $?            # 0 = clean, 1 = warnings or worse
 $ volt-watch --output /var/lib/volt-watch/last.json
 $ volt-watch --since /var/lib/volt-watch/last.json
 $ volt-watch --check power       # only the power.* checks
+$ volt-watch --list-checks       # list check groups, prefixes, and finding names
 $ volt-watch --fail-on critical  # exit 1 only for critical findings
 ```
 
