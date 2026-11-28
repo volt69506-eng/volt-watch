@@ -24,6 +24,18 @@ def test_collector_returns_only_uid_zero_accounts(tmp_path):
     ]
 
 
+def test_collector_keeps_standard_uid0_placeholders_for_the_check(tmp_path):
+    passwd = tmp_path / "passwd"
+    passwd.write_text("sync:x:0:0:sync:/sbin:/bin/sync\n", encoding="utf-8")
+
+    accounts = collector.uid0_accounts(str(passwd))
+
+    assert accounts == [
+        {"name": "sync", "uid": 0, "home": "/sbin", "shell": "/bin/sync"}
+    ]
+    assert uid0_accounts_check(accounts) == []
+
+
 def test_collector_never_returns_the_password_field(tmp_path):
     passwd = tmp_path / "passwd"
     passwd.write_text("toor:$6$salt$hash:0:0::/home/toor:/bin/bash\n", encoding="utf-8")
@@ -59,6 +71,25 @@ def test_only_root_is_allowed_as_uid_zero():
     assert uid0_accounts_check([
         {"name": "root", "uid": 0, "home": "/root", "shell": "/bin/bash"}
     ]) == []
+
+
+def test_standard_uid0_placeholders_with_their_own_shell_are_not_findings():
+    accounts = [
+        {"name": name, "uid": 0, "home": "/sbin", "shell": f"/sbin/{name}"}
+        for name in ("sync", "shutdown", "halt")
+    ]
+
+    assert uid0_accounts_check(accounts) == []
+
+
+def test_a_uid0_account_named_sync_with_a_login_shell_is_a_finding():
+    findings = uid0_accounts_check([
+        {"name": "sync", "uid": 0, "home": "/home/sync", "shell": "/bin/bash"}
+    ])
+
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.CRITICAL
+    assert findings[0].evidence["name"] == "sync"
 
 
 def test_each_extra_uid_zero_account_is_critical():
