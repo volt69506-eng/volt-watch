@@ -3,6 +3,7 @@
 from . import collector
 from .checks import (
     auditor_degraded_check,
+    boot_preset_check,
     clock_check,
     config_drift_check,
     disk_space_check,
@@ -84,6 +85,7 @@ CHECKS: dict[str, list] = {
     "kernel": [
         lambda: kernel_reboot_check(collector.kernel_versions()),
         lambda: reboot_required_check(collector.reboot_required_markers()),
+        lambda: boot_preset_check(collector.boot_flow()),
     ],
     "packages": [
         lambda: pending_updates_check(collector.pending_update_count()),

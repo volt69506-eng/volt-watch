@@ -602,6 +602,97 @@ def normalize_release(release: str) -> str:
     return release.strip()
 
 
+# Bootloader markers, checked in this order. The first one found wins; an
+# unrecognised layout stays None so the check cannot guess.
+_BOOTLOADER_MARKERS = (
+    ("limine", "limine.cfg"),
+    ("systemd-boot", "loader/loader.conf"),
+    ("grub", "grub/grub.cfg"),
+)
+
+
+def boot_flow(
+    script_dirs=("/usr/share/libalpm/scripts", "/etc/pacman.d/hooks"),
+    boot_dir: str = "/boot",
+    preset_dir: str = "/etc/mkinitcpio.d",
+    kernel_packages: list | None = None,
+) -> dict:
+    """Describe the installed boot flow without changing any boot state.
+
+    Reads only hook/script *text* and file names. Unknown things stay ``None``:
+    an absent bootloader or unreadable hook directory is not evidence that a
+    preset is missing. ``explicit_args`` means some hook builds an initramfs
+    with an explicit ``--kernel``/``--generate`` argument, as Limine's install
+    script does, so presets are irrelevant to that host.
+    """
+    bootloader = None
+    for name, marker in _BOOTLOADER_MARKERS:
+        if (Path(boot_dir) / marker).is_file():
+            bootloader = name
+            break
+
+    preset_driven = None
+    explicit_args = False
+    found_preset_call = False
+    for directory in script_dirs:
+        try:
+            candidates = sorted(Path(directory).iterdir())
+        except OSError:
+            continue
+        for candidate in candidates:
+            try:
+                if not candidate.is_file() or candidate.stat().st_size > 1_000_000:
+                    continue
+                text = candidate.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            # Real hooks build an argument array on one line and call
+            # `mkinitcpio "${args[@]}"` on another, so scan the whole file.
+            if "mkinitcpio" in text and re.search(r"--kernel|--generate", text):
+                explicit_args = True
+            if "mkinitcpio" in text and re.search(r"(?:^|\s)-P\b|--preset\b", text, re.M):
+                found_preset_call = True
+
+    try:
+        presets = sorted(
+            entry.stem for entry in Path(preset_dir).iterdir()
+            if entry.is_file() and entry.name.endswith(".preset")
+        )
+    except OSError:
+        presets = []
+
+    if kernel_packages is None:
+        kernel_packages = []
+        try:
+            done = _run(["pacman", "-Q"])
+        except (OSError, subprocess.SubprocessError):
+            done = None
+        if done is not None and done.returncode == 0:
+            for line in done.stdout.splitlines():
+                fields = line.split()
+                if len(fields) != 2:
+                    continue
+                name = fields[0]
+                if name.startswith("linux") and not any(
+                    marker in name for marker in NON_KERNEL_MARKERS
+                ):
+                    kernel_packages.append(name)
+
+    if explicit_args:
+        preset_driven = False
+    elif found_preset_call or presets:
+        preset_driven = True
+
+    return {
+        "bootloader": bootloader,
+        "preset_driven": preset_driven,
+        "explicit_args": explicit_args,
+        "kernels": kernel_packages,
+        "presets": presets,
+        "preset_dir": preset_dir,
+    }
+
+
 def kernel_versions() -> dict | None:
     """Return the running and installed kernel releases, or None.
 

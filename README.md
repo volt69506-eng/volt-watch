@@ -128,6 +128,7 @@ still works exactly as before.
 | `systemd.failed` | warning / critical | A systemd unit's last run failed; critical when the unit is one whose loss makes the host unreachable |
 | `kernel.pending_reboot` | warning | A kernel is installed that is newer than the running one |
 | `system.reboot_required` | warning | Reboot-required marker file present (e.g. `/run/reboot-required`) |
+| `boot.preset_missing` | warning | A preset-driven boot flow has an installed kernel with no matching mkinitcpio preset |
 | `packages.orphaned` | info / warning | Installed packages nothing requires; a kernel or boot-path package is a warning |
 | `config.drift` | warning | A config file replaced by pacman (`.pacnew`/`.pacsave`) awaits review |
 | `config.drift_unknown` | warning | The `/etc` scan could not be completed, so replaced config files are unknown |
@@ -168,6 +169,7 @@ unread firewall looks exactly like a firewall with no SSH rules.
 | `disk.space_low` | yes | no | `statvfs` on the root filesystem, standard library only |
 | `systemd.failed` | partial | **yes** | `systemctl --failed` lists system units for everyone, but a root-only unit can be hidden from a user manager |
 | `kernel.pending_reboot` | yes | no | `uname -r` and `pacman -Q`; no kernel package on a non-Arch host is not a finding |
+| `boot.preset_missing` | yes | no | reads hook/script text, bootloader marker file names and installed package names; no boot file is modified |
 | `system.reboot_required` | yes | no | checks known reboot marker paths; missing markers are not findings |
 | `tailscale.*` | yes | no | reads the local Tailscale socket |
 | `power.restore_disabled` | partial | **yes** | `setpci` reads PCI config space, which is root-only |

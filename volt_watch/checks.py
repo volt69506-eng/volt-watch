@@ -1169,6 +1169,38 @@ def listener_exposure_check(listeners: list[dict] | None, rules: list[dict] | No
     return findings
 
 
+def boot_preset_check(flow: dict | None) -> list:
+    """Report installed kernels with no preset, only in a preset-driven flow.
+
+    An explicit-argument builder (Limine) does not use presets at all, and an
+    unknown bootloader is not a verdict. Nothing here reads boot files: the
+    collector already reduced them to plain data.
+    """
+    if not flow or not flow.get("bootloader"):
+        return []
+    if flow.get("explicit_args") or not flow.get("preset_driven"):
+        return []
+
+    preset_dir = flow.get("preset_dir", "/etc/mkinitcpio.d")
+    present = set(flow.get("presets") or [])
+    findings = []
+    for kernel in flow.get("kernels") or []:
+        if kernel in present:
+            continue
+        path = f"{preset_dir.rstrip('/')}/{kernel}.preset"
+        findings.append(Finding(
+            check="boot.preset_missing",
+            severity=Severity.WARNING,
+            message=f"Kernel package {kernel} has no boot preset at {path}",
+            remedy=(
+                "Add a matching mkinitcpio preset for this kernel, or confirm "
+                "your bootloader builds the initramfs with explicit arguments."
+            ),
+            evidence={"kernel": kernel, "path": path},
+        ))
+    return findings
+
+
 def reboot_required_check(markers: list[str] | None) -> list:
     """Report reboot-required marker files present on the host.
 
