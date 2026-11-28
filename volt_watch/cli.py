@@ -94,7 +94,11 @@ def _parse_args(argv):
     parser.add_argument(
         "--check",
         metavar="PREFIX",
-        help="run only the checks whose name starts with PREFIX, e.g. --check power",
+        action="append",
+        help=(
+            "run only checks whose group starts with PREFIX; repeat the flag "
+            "or use commas for several (e.g. --check security,network)"
+        ),
     )
     parser.add_argument(
         "--list-checks",
@@ -242,6 +246,14 @@ def main(argv=None, findings=None) -> int:
 
     fmt = args.format or "text"
     machine_readable = bool(args.json) or fmt in ("json", "ndjson")
+    checks = None
+    if args.check:
+        checks = [
+            prefix.strip()
+            for value in args.check
+            for prefix in value.split(",")
+            if prefix.strip()
+        ] or None
 
     if args.list_checks:
         groups = list_checks()
@@ -257,18 +269,20 @@ def main(argv=None, findings=None) -> int:
                     print(f"  - {name}")
         return 0
 
-    if args.check and not any(p.startswith(args.check) for p in check_prefixes()):
-        available = ", ".join(check_prefixes())
-        message = f"unknown check prefix {args.check!r}; available: {available}"
-        if machine_readable:
-            payload = _payload([], {"readers": 0, "degraded": []})
-            print(json.dumps({**payload, "error": message}, indent=2))
-        elif not args.quiet:
-            print(f"volt-watch: error: {message}", file=sys.stderr)
-        return 2
+    if checks:
+        invalid = [c for c in checks if not any(p.startswith(c) for p in check_prefixes())]
+        if invalid:
+            available = ", ".join(check_prefixes())
+            message = f"unknown check prefix(es): {', '.join(invalid)}; available: {available}"
+            if machine_readable:
+                payload = _payload([], {"readers": 0, "degraded": []})
+                print(json.dumps({**payload, "error": message}, indent=2))
+            elif not args.quiet:
+                print(f"volt-watch: error: {message}", file=sys.stderr)
+            return 2
 
     if findings is None:
-        audited, coverage = audit_with_coverage(only=args.check)
+        audited, coverage = audit_with_coverage(only=checks)
         findings = [f.as_dict() for f in audited]
     else:
         coverage = _coverage_from_findings(findings)
