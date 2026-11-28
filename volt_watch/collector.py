@@ -39,6 +39,8 @@ SENSITIVE_PATH_SPECS = [
     {"path": "/var/lib/tailscale/tailscaled.state", "kind": "tailscale_state"},
     {"path": "/run/docker.sock", "kind": "docker_sock"},
     {"path": "/etc/ssh/ssh_host_*_key", "kind": "ssh_host_private_key"},
+    {"path": "/etc/sudoers", "kind": "sudoers_policy"},
+    {"path": "/etc/sudoers.d/*", "kind": "sudoers_policy"},
     # Narrow allowlist of credential files that are commonly copied by hand
     # onto a single host and end up world-readable. No recursive scanning.
     {"path": "~/.aws/credentials", "kind": "cloud_credential"},
@@ -946,6 +948,7 @@ def _sensitive_expected(kind: str) -> str:
         "tailscale_state": "not world-readable",
         "docker_sock": "root:docker 0660 or stricter",
         "ssh_host_private_key": "0600 root-owned",
+        "sudoers_policy": "0440 root-owned",
         "cloud_credential": "0600 owner-owned",
         "container_credential": "0600 owner-owned",
         "ssh_user_private_key": "0600 owner-owned",

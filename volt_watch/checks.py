@@ -970,6 +970,12 @@ def _sensitive_violation(record: dict) -> tuple[Severity, str] | None:
         if mode & 0o077 or uid != 0:
             return Severity.CRITICAL, "SSH host private key must be 0600 and root-owned"
         return None
+    if kind == "sudoers_policy":
+        if mode & 0o022 or uid != 0:
+            return Severity.CRITICAL, "Sudoers policy must be root-owned and not group/world-writable"
+        if world_readable:
+            return Severity.WARNING, "Sudoers policy should not be world-readable"
+        return None
     if kind == "ssh_user_private_key":
         if mode & 0o077:
             return Severity.CRITICAL, "SSH user private key must be 0600"

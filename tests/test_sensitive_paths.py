@@ -3,6 +3,8 @@
 import os
 import stat
 
+import pytest
+
 from volt_watch import auditor
 from volt_watch.checks import sensitive_path_permissions_check
 from volt_watch.severity import Severity
@@ -307,3 +309,133 @@ def test_ssh_authorized_keys_and_dir_safe_permissions_clean(tmp_path, monkeypatc
     records = collector.sensitive_path_records()
     assert len(records) == 2
     assert sensitive_path_permissions_check(records) == []
+
+
+@pytest.mark.parametrize(
+    "mode, uid, severity",
+    [
+        (0o460, 0, Severity.CRITICAL),
+        (0o442, 0, Severity.CRITICAL),
+        (0o666, 0, Severity.CRITICAL),
+        (0o440, 1000, Severity.CRITICAL),
+        (0o444, 0, Severity.WARNING),
+        (0o440, 0, None),
+        (0o400, 0, None),
+    ],
+)
+def test_sudoers_policy_permissions(mode, uid, severity):
+    rec = {
+        "path": "/etc/sudoers.d/90-admin",
+        "kind": "sudoers_policy",
+        "exists": True,
+        "mode": oct(mode),
+        "uid": uid,
+        "gid": 0,
+        "owner": "root" if uid == 0 else "admin",
+        "group": "root",
+        "readable": True,
+        "expected": "0440 root-owned",
+    }
+    findings = sensitive_path_permissions_check([rec])
+    if severity is None:
+        assert findings == []
+    else:
+        assert len(findings) == 1
+        assert findings[0].check == "security.sensitive_path_permissions"
+        assert findings[0].severity is severity
+
+
+def test_sudoers_policy_unstatable_is_unknown():
+    rec = {
+        "path": "/etc/sudoers",
+        "kind": "sudoers_policy",
+        "exists": True,
+        "readable": False,
+        "mode": None,
+        "uid": None,
+        "gid": None,
+        "owner": None,
+        "group": None,
+        "expected": "0440 root-owned",
+    }
+    findings = sensitive_path_permissions_check([rec])
+    assert len(findings) == 1
+    assert findings[0].check == "security.sensitive_path_unknown"
+    assert findings[0].severity is Severity.WARNING
+
+
+def _temporary_sudoers_specs(tmp_path, monkeypatch):
+    from volt_watch import collector
+
+    # Redirect the actual allowlist entries, so this also catches a missing main/glob spec.
+    specs = [
+        {**spec, "path": str(tmp_path / spec["path"].lstrip("/"))}
+        for spec in collector.SENSITIVE_PATH_SPECS
+        if spec["kind"] == "sudoers_policy"
+    ]
+    monkeypatch.setattr(collector, "SENSITIVE_PATH_SPECS", specs)
+    return collector
+
+
+def test_sudoers_collector_to_check_uses_metadata_without_reading_policy(tmp_path, monkeypatch):
+    collector = _temporary_sudoers_specs(tmp_path, monkeypatch)
+    policy = tmp_path / "etc" / "sudoers"
+    include = tmp_path / "etc" / "sudoers.d" / "90-admin"
+    include.parent.mkdir(parents=True)
+    sentinel = "NOPASSWD: private-policy-canary"
+    for path in (policy, include):
+        path.write_text(sentinel)
+        path.chmod(0o660)
+
+    def refuse_contents(*args, **kwargs):
+        raise AssertionError("The sensitive-path reader must not read policy contents")
+
+    with monkeypatch.context() as guard:
+        guard.setattr("builtins.open", refuse_contents)
+        guard.setattr(type(policy), "read_text", refuse_contents)
+        guard.setattr(type(policy), "read_bytes", refuse_contents)
+        records = collector.sensitive_path_records()
+
+    assert {r["path"] for r in records} == {str(policy), str(include)}
+    assert all(r["kind"] == "sudoers_policy" for r in records)
+    assert all(r["expected"] == "0440 root-owned" for r in records)
+    assert all(r["mode"] == "0o660" for r in records)
+    findings = sensitive_path_permissions_check(records)
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.CRITICAL
+    evidence = findings[0].evidence
+    assert sentinel not in str(evidence)
+    assert "NOPASSWD" not in str(evidence)
+    for item in evidence["paths"]:
+        assert set(item) == {"path", "mode", "uid", "gid", "owner", "group", "expected", "reason"}
+        metadata = os.lstat(item["path"])
+        assert item["uid"] == metadata.st_uid
+        assert item["gid"] == metadata.st_gid
+        assert item["owner"] and item["group"]
+
+
+def test_missing_sudoers_policy_paths_are_clean(tmp_path, monkeypatch):
+    collector = _temporary_sudoers_specs(tmp_path, monkeypatch)
+    assert sensitive_path_permissions_check(collector.sensitive_path_records()) == []
+
+
+def test_sudoers_collector_stat_failure_stays_unknown(tmp_path, monkeypatch):
+    collector = _temporary_sudoers_specs(tmp_path, monkeypatch)
+    policy = tmp_path / "etc" / "sudoers"
+    policy.parent.mkdir()
+    policy.touch()
+    real_lstat = os.lstat
+
+    def denied(path, *args, **kwargs):
+        if str(path) == str(policy):
+            raise PermissionError("metadata unavailable")
+        return real_lstat(path, *args, **kwargs)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(collector.os, "lstat", denied)
+        records = collector.sensitive_path_records()
+    assert len(records) == 1
+    findings = sensitive_path_permissions_check(records)
+    assert len(findings) == 1
+    assert findings[0].check == "security.sensitive_path_unknown"
+    assert findings[0].evidence["path"] == str(policy)
