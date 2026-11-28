@@ -1148,6 +1148,25 @@ def _port_covered_by_tailscale_only(port: int, proto: str, rules: list[dict]) ->
     return False
 
 
+def _broad_allow_rule(port: int, proto: str, rules: list[dict]) -> dict | None:
+    """Return the first rule that allows this port from anywhere, if any.
+
+    A broad allow (no interface, non-private source) exposes the port even
+    when the default policy denies: the default is not what protects it.
+    Mirrors the broad-allow branch of :func:`ssh_exposure_check`.
+    """
+    token = f"{port}/{proto}"
+    token_any = str(port)
+    for rule in rules:
+        if rule.get("action") != "ALLOW":
+            continue
+        if str(rule.get("port", "")) not in {token, token_any}:
+            continue
+        if not rule.get("interface") and not _is_private_source(str(rule.get("source", ""))):
+            return rule
+    return None
+
+
 def listener_exposure_check(listeners: list[dict] | None, rules: list[dict] | None, default_incoming: str | None = "deny") -> list:
     """Report non-loopback wide-bind listeners.
 
@@ -1187,6 +1206,16 @@ def listener_exposure_check(listeners: list[dict] | None, rules: list[dict] | No
         if not _listener_is_wide_bind(addr):
             continue
         if _port_covered_by_tailscale_only(port, proto, rules):
+            continue
+        broad_rule = _broad_allow_rule(port, proto, rules)
+        if broad_rule is not None:
+            findings.append(Finding(
+                check="network.listener_exposed",
+                severity=Severity.CRITICAL,
+                message=f"Listener {proto}/{port} binds {addr} and the firewall allows it from any source on every interface",
+                remedy=f"Change the allow rule for {port} to accept traffic only on tailscale0 (and a private source), or bind the service to localhost.",
+                evidence={"address": addr, "port": port, "proto": proto, "process": l.get("process", ""), "rule": broad_rule},
+            ))
             continue
         if default_incoming == "allow":
             severity = Severity.WARNING

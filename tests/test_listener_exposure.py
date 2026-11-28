@@ -45,6 +45,24 @@ def test_firewall_unreadable_returns_unknown_not_silence():
     assert findings[0].severity is Severity.WARNING
 
 
+def test_broad_allow_on_the_port_is_critical():
+    listeners = [{"address": "0.0.0.0", "port": 8099, "proto": "tcp", "process": "next-server"}]
+    rules = [{"port": "8099/tcp", "action": "ALLOW", "interface": "", "source": "Anywhere"}]
+    findings = listener_exposure_check(listeners, rules, "deny")
+    assert [f.check for f in findings] == ["network.listener_exposed"]
+    assert findings[0].severity is Severity.CRITICAL
+    assert findings[0].evidence["rule"] == rules[0]
+    assert "tailscale0" in findings[0].remedy
+
+
+def test_broad_allow_on_another_port_is_not_exposed():
+    listeners = [{"address": "0.0.0.0", "port": 8099, "proto": "tcp", "process": "next-server"}]
+    rules = [{"port": "4000/tcp", "action": "ALLOW", "interface": "", "source": "Anywhere"}]
+    findings = listener_exposure_check(listeners, rules, "deny")
+    assert [f.check for f in findings] == ["network.listener_wide_bind"]
+    assert findings[0].severity is Severity.INFO
+
+
 def test_auditor_network_group_runs_listener_check(monkeypatch):
     monkeypatch.setattr(auditor.collector, "listening_ports", lambda: [
         {"address": "0.0.0.0", "port": 3000, "proto": "tcp", "process": "next"}

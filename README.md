@@ -143,6 +143,7 @@ above; a degraded audit exits 1 even with `--fail-on critical`.
 | `tailscale.ssh_enabled` | info | Tailscale SSH is enabled on this node (visible posture signal) |
 | `tailscale.published` | info | A port is published to the tailnet with `tailscale serve` |
 | `tailscale.backend` | critical | Backend state is `NeedsLogin`, `Stopped`, `NoState` or `Starting` |
+| `network.listener_exposed` | critical | A wildcard-bound port has a firewall allow on every interface from a non-private source, so the default-deny policy is not what protects it |
 | `network.listener_wide_bind` | info / warning | A non-SSH service listens on 0.0.0.0/::; warning when firewall default allows, info when deny-default protects it but bind is wider than needed |
 | `network.firewall_unreadable` | warning | Firewall state could not be read, so listener exposure is unknown |
 | `network.listeners_unreadable` | warning | Neither `ss` nor `/proc/net/tcp*` could be read, so listening sockets are unknown |
