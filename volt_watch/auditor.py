@@ -1,5 +1,8 @@
 """Run every check against the live host and collect the findings."""
 
+import ast
+from pathlib import Path
+
 from . import collector
 from .checks import (
     auditor_degraded_check,
@@ -102,6 +105,70 @@ CHECKS: dict[str, list] = {
 def check_prefixes() -> list:
     """Every prefix ``--check`` accepts, in report order."""
     return list(CHECKS)
+
+
+def _ast_finding_registry() -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, list[str]]]:
+    direct: dict[str, set[str]] = {}
+    calls: dict[str, set[str]] = {}
+    group_refs: dict[str, list[str]] = {}
+
+    for name in ("checks.py", "auditor.py"):
+        tree = ast.parse(Path(__file__).with_name(name).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                fn_findings: set[str] = set()
+                fn_calls: set[str] = set()
+                for child in ast.walk(node):
+                    if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                        fn_calls.add(child.func.id)
+                        if child.func.id == "Finding":
+                            for kw in child.keywords:
+                                if kw.arg == "check" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                                    fn_findings.add(kw.value.value)
+                direct[node.name] = fn_findings
+                calls[node.name] = fn_calls
+            if name == "auditor.py" and isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(isinstance(t, ast.Name) and t.id == "CHECKS" for t in targets) and isinstance(node.value, ast.Dict):
+                    for key, val in zip(node.value.keys, node.value.values):
+                        if isinstance(key, ast.Constant) and isinstance(key.value, str) and isinstance(val, ast.List):
+                            refs: list[str] = []
+                            for elt in val.elts:
+                                if isinstance(elt, ast.Name):
+                                    refs.append(elt.id)
+                                else:
+                                    for sub in ast.walk(elt):
+                                        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                                            refs.append(sub.func.id)
+                            group_refs[key.value] = refs
+    return direct, calls, group_refs
+
+
+def list_checks() -> list[dict]:
+    """Return sorted registered check groups, prefixes, and finding names without host reads."""
+    direct, calls, group_refs = _ast_finding_registry()
+
+    def resolve(fn_name: str, seen: set[str]) -> set[str]:
+        if fn_name in seen:
+            return set()
+        seen.add(fn_name)
+        found = set(direct.get(fn_name, ()))
+        for callee in calls.get(fn_name, ()):
+            found.update(resolve(callee, seen))
+        return found
+
+    out = []
+    for group in sorted(check_prefixes()):
+        findings: set[str] = set()
+        for ref in group_refs.get(group, ()):
+            findings.update(resolve(ref, set()))
+        ordered = sorted(findings)
+        out.append({
+            "group": group,
+            "prefixes": sorted({name.split(".", 1)[0] for name in ordered}),
+            "findings": ordered,
+        })
+    return out
 
 
 def audit_with_coverage(only: str | None = None) -> tuple[list, dict]:

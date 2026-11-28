@@ -15,7 +15,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .auditor import audit, audit_with_coverage, check_prefixes  # noqa: F401 - audit is a public seam
+from .auditor import audit, audit_with_coverage, check_prefixes, list_checks  # noqa: F401 - audit is a public seam
 
 # Lower is worse; a rise means the finding got more severe. The same ranking
 # drives --since comparisons and the --fail-on threshold so they cannot disagree.
@@ -97,6 +97,11 @@ def _parse_args(argv):
         help="run only the checks whose name starts with PREFIX, e.g. --check power",
     )
     parser.add_argument(
+        "--list-checks",
+        action="store_true",
+        help="print registered check groups, prefixes, and finding names, then exit",
+    )
+    parser.add_argument(
         "--fail-on",
         choices=("critical", "warning", "info"),
         help=(
@@ -104,7 +109,10 @@ def _parse_args(argv):
             "with --since, any new or worsened finding)"
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.list_checks and (args.since is not None or args.output is not None):
+        parser.error("--list-checks cannot be used with --since or --output")
+    return args
 
 
 def _finding_key(finding):
@@ -234,6 +242,20 @@ def main(argv=None, findings=None) -> int:
 
     fmt = args.format or "text"
     machine_readable = bool(args.json) or fmt in ("json", "ndjson")
+
+    if args.list_checks:
+        groups = list_checks()
+        if fmt == "ndjson":
+            print(json.dumps({"version": REPORT_VERSION, "checks": groups}, separators=(",", ":")))
+        elif machine_readable:
+            print(json.dumps({"version": REPORT_VERSION, "checks": groups}, indent=2))
+        elif not args.quiet:
+            for entry in groups:
+                prefixes = ", ".join(entry["prefixes"])
+                print(f"{entry['group']} (prefixes: {prefixes})")
+                for name in entry["findings"]:
+                    print(f"  - {name}")
+        return 0
 
     if args.check and not any(p.startswith(args.check) for p in check_prefixes()):
         available = ", ".join(check_prefixes())
