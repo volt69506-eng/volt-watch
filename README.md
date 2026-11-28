@@ -84,8 +84,10 @@ uses the check and its evidence, not the message text. A missing baseline adds
 an `auditor.no_baseline` `info` finding.
 
 `--check PREFIX` runs only the checks whose name starts with the prefix, so
-`--check power` runs every `power.*` check and nothing else. An unknown prefix
-exits 2 and lists the available ones.
+`--check power` runs every `power.*` check and nothing else. Repeat the flag or
+use commas to select several groups (`--check security,network` or
+`--check security --check network`). Overlapping prefixes never run a group
+twice. An unknown prefix exits 2 and lists the available ones.
 
 The JSON payload is versioned (currently `2`) and carries the `host` name, the
 UTC `generated_at` timestamp and a `coverage` summary (`readers` attempted and

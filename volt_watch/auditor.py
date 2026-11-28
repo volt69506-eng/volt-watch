@@ -171,8 +171,12 @@ def list_checks() -> list[dict]:
     return out
 
 
-def audit_with_coverage(only: str | None = None) -> tuple[list, dict]:
+def audit_with_coverage(only: str | list[str] | None = None) -> tuple[list, dict]:
     """Run the checks and return ``(findings, coverage)``.
+
+    ``only`` keeps its original single-string form and also accepts a list of
+    prefixes: a group runs when any prefix matches it. Groups are still
+    iterated once, so overlapping prefixes cannot duplicate findings.
 
     ``coverage`` describes how complete the run was: ``readers`` counts the
     check callables attempted (fewer with ``--check``) and ``degraded`` lists
@@ -181,11 +185,12 @@ def audit_with_coverage(only: str | None = None) -> tuple[list, dict]:
 
     ``audit`` stays a plain list of findings for existing callers.
     """
+    selected = None if only is None else ([only] if isinstance(only, str) else list(only))
     findings = []
     readers = 0
 
     for prefix, checks in CHECKS.items():
-        if only is not None and not prefix.startswith(only):
+        if selected is not None and not any(prefix.startswith(s) for s in selected):
             continue
         for check in checks:
             readers += 1
@@ -199,7 +204,7 @@ def audit_with_coverage(only: str | None = None) -> tuple[list, dict]:
     return findings, coverage
 
 
-def audit(only: str | None = None) -> list:
+def audit(only: str | list[str] | None = None) -> list:
     """Inspect the host and return every finding, worst first.
 
     ``only`` restricts the run to the groups whose prefix starts with it, so
