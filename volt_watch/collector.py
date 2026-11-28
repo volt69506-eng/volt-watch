@@ -47,6 +47,8 @@ SENSITIVE_PATH_SPECS = [
     {"path": "~/.docker/config.json", "kind": "container_credential"},
     {"path": "/home/*/.ssh/id_*", "kind": "ssh_user_private_key"},
     {"path": "/root/.ssh/id_*", "kind": "ssh_user_private_key"},
+    {"path": "~/.ssh/authorized_keys", "kind": "ssh_authorized_keys"},
+    {"path": "~/.ssh", "kind": "ssh_dir"},
 ]
 
 SUDOERS_PATH = "/etc/sudoers"
@@ -944,6 +946,8 @@ def _sensitive_expected(kind: str) -> str:
         "cloud_credential": "0600 owner-owned",
         "container_credential": "0600 owner-owned",
         "ssh_user_private_key": "0600 owner-owned",
+        "ssh_authorized_keys": "0644 or stricter (not group/world-writable)",
+        "ssh_dir": "0700 or stricter (not group/world-writable)",
     }.get(kind, "restricted")
 
 

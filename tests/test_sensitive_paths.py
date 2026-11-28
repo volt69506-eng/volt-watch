@@ -227,3 +227,83 @@ def test_collector_user_ssh_keys_pub_files_ignored(tmp_path, monkeypatch):
     records = collector.sensitive_path_records()
     assert [r["path"] for r in records] == [str(ssh_dir / "id_ed25519")]
     assert records[0]["kind"] == "ssh_user_private_key"
+
+
+def test_ssh_authorized_keys_group_or_world_writable_is_critical():
+    for mode in ("0o620", "0o642", "0o666"):
+        rec = {
+            "path": "/home/alice/.ssh/authorized_keys",
+            "exists": True,
+            "mode": mode,
+            "uid": 1000,
+            "gid": 1000,
+            "owner": "alice",
+            "group": "alice",
+            "readable": True,
+            "expected": "0644 or stricter (not group/world-writable)",
+            "kind": "ssh_authorized_keys",
+        }
+        findings = sensitive_path_permissions_check([rec])
+        assert len(findings) == 1
+        assert findings[0].check == "security.sensitive_path_permissions"
+        assert findings[0].severity is Severity.CRITICAL
+
+
+def test_ssh_authorized_keys_readable_only_is_info():
+    rec = {
+        "path": "/home/alice/.ssh/authorized_keys",
+        "exists": True,
+        "mode": "0o644",
+        "uid": 1000,
+        "gid": 1000,
+        "owner": "alice",
+        "group": "alice",
+        "readable": True,
+        "expected": "0644 or stricter (not group/world-writable)",
+        "kind": "ssh_authorized_keys",
+    }
+    findings = sensitive_path_permissions_check([rec])
+    assert len(findings) == 1
+    assert findings[0].check == "security.sensitive_path_permissions"
+    assert findings[0].severity is Severity.INFO
+
+
+def test_ssh_dir_group_or_world_writable_is_critical():
+    for mode in ("0o720", "0o755"):
+        rec = {
+            "path": "/home/alice/.ssh",
+            "exists": True,
+            "mode": mode,
+            "uid": 1000,
+            "gid": 1000,
+            "owner": "alice",
+            "group": "alice",
+            "readable": True,
+            "expected": "0700 or stricter (not group/world-writable)",
+            "kind": "ssh_dir",
+        }
+        findings = sensitive_path_permissions_check([rec])
+        if mode == "0o720":
+            assert len(findings) == 1
+            assert findings[0].severity is Severity.CRITICAL
+        else:
+            assert findings == []
+
+
+def test_ssh_authorized_keys_and_dir_safe_permissions_clean(tmp_path, monkeypatch):
+    from volt_watch import collector
+
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    auth = ssh_dir / "authorized_keys"
+    auth.write_bytes(b"ssh-ed25519 AAAA\n")
+    os.chmod(auth, 0o600)
+    os.chmod(ssh_dir, 0o700)
+    monkeypatch.setattr(collector, "HOME", tmp_path)
+    monkeypatch.setattr(collector, "SENSITIVE_PATH_SPECS", [
+        {"path": "~/.ssh/authorized_keys", "kind": "ssh_authorized_keys"},
+        {"path": "~/.ssh", "kind": "ssh_dir"},
+    ])
+    records = collector.sensitive_path_records()
+    assert len(records) == 2
+    assert sensitive_path_permissions_check(records) == []
