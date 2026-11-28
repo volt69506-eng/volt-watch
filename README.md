@@ -164,6 +164,7 @@ above; a degraded audit exits 1 even with `--fail-on critical`.
 | `security.world_writable_sensitive_runtime` | critical | World-writable entry in a sensitive runtime directory (bounded top-level scan) |
 | `security.sensitive_runtime_unknown` | warning | Could not inspect a sensitive runtime directory |
 | `security.sensitive_path_unknown` | warning | A sensitive path exists but could not be stat/read, so its permissions are unknown |
+| `security.ssh_host_key_weak_algorithm` | warning | A public SSH host key uses DSA or RSA below 2048 bits; evidence contains only its public path, algorithm and bit count |
 | `security.passwordless_sudo` | critical / warning | A sudoers rule grants NOPASSWD; critical for full `ALL`, warning for narrow/expired grants |
 | `firewall.disabled` | critical | UFW is installed but inactive, so host firewall rules are not filtering incoming connections |
 | `firewall.default_allow` | critical / warning | The firewall default incoming policy is `allow`, or another policy the auditor cannot classify as safe |
@@ -185,6 +186,7 @@ unread firewall looks exactly like a firewall with no SSH rules.
 | `sshd.*` | partial | **yes** | reads `ufw status verbose`, a root-only wrapper on Arch/Omarchy |
 | `firewall.*` | partial | **yes** | reads the same `ufw status verbose` default-policy line |
 | `network.*` | partial | **yes** | reads listening sockets via `ss`, falling back to `/proc/net/tcp*`; reads firewall state; an unreadable source is reported as `network.listeners_unreadable` / `network.firewall_unreadable` |
+| `security.ssh_host_key_weak_algorithm` | yes | no | Reads only regular `/etc/ssh/ssh_host_*_key.pub` files, at most 8 keys / 128 directory entries / 16 KiB per file. Rejects symlinks/private headers before `ssh-keygen -l -f`; legacy DSA public parameters remain detectable when modern OpenSSH rejects DSA. Unavailable files or tools are `auditor.degraded`, not clean or weak; no fingerprints, key data, comments or command output enter evidence |
 | `security.*` | partial | **yes** | reads `/etc/shadow` and sudoers; an unprivileged run reports unknown/degraded findings instead of guessing |
 | `config.*` | partial | **yes** | walks `/etc` for `*.pacnew`/`*.pacsave` and world-writable paths; an unreadable subtree makes the scan unknown |
 | `auditor.degraded` | yes | no | summarizes readers that could not run, without another privileged read |
