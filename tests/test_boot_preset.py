@@ -1,5 +1,7 @@
 """TDD: only report a missing boot preset when the boot flow is preset-driven (#48)."""
 
+import pytest
+
 from volt_watch import collector
 from volt_watch.checks import boot_preset_check
 from volt_watch.severity import Severity
@@ -23,6 +25,31 @@ def _script(tmp_path, name, text):
     path.parent.mkdir(exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "limine.cfg",
+        "limine.conf",
+        "EFI/limine/limine.cfg",
+        "EFI/limine/limine.conf",
+    ],
+)
+def test_collector_recognises_common_limine_layouts(tmp_path, marker):
+    boot = tmp_path / "boot"
+    entry = boot / marker
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text("# limine\n", encoding="utf-8")
+
+    flow = collector.boot_flow(
+        script_dirs=(str(tmp_path / "empty-scripts"),),
+        boot_dir=str(boot),
+        preset_dir=str(tmp_path / "empty-presets"),
+        kernel_packages=[],
+    )
+
+    assert flow["bootloader"] == "limine"
 
 
 def test_collector_detects_explicit_argument_builder(tmp_path):

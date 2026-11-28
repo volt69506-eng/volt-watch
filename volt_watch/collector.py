@@ -606,6 +606,9 @@ def normalize_release(release: str) -> str:
 # unrecognised layout stays None so the check cannot guess.
 _BOOTLOADER_MARKERS = (
     ("limine", "limine.cfg"),
+    ("limine", "limine.conf"),
+    ("limine", "EFI/limine/limine.cfg"),
+    ("limine", "EFI/limine/limine.conf"),
     ("systemd-boot", "loader/loader.conf"),
     ("grub", "grub/grub.cfg"),
 )

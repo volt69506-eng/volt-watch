@@ -191,7 +191,7 @@ unread firewall looks exactly like a firewall with no SSH rules.
 | `disk.space_low` | yes | no | `statvfs` on the root filesystem, standard library only |
 | `systemd.failed` | partial | **yes** | `systemctl --failed` lists system units for everyone, but a root-only unit can be hidden from a user manager |
 | `kernel.pending_reboot` | yes | no | `uname -r` and `pacman -Q`; no kernel package on a non-Arch host is not a finding |
-| `boot.preset_missing` | yes | no | reads hook/script text, bootloader marker file names and installed package names; no boot file is modified |
+| `boot.preset_missing` | partial | **yes** | reads hook/script text, bootloader marker file names and installed package names; no boot file is modified. On hosts where `/boot` is root-only (e.g. Omarchy's `0700` ESP), an unprivileged run cannot identify the bootloader and reports nothing rather than guessing; run as root for an authoritative answer |
 | `system.reboot_required` | yes | no | checks known reboot marker paths; missing markers are not findings |
 | `tailscale.*` | yes | no | reads the local Tailscale socket |
 | `power.restore_disabled` | partial | **yes** | `setpci` reads PCI config space, which is root-only |
