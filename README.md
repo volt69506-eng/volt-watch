@@ -135,7 +135,7 @@ above; a degraded audit exits 1 even with `--fail-on critical`.
 | `sshd.password_auth` | warning | sshd accepts password authentication |
 | `security.empty_password_accounts` | critical | An account has an empty password field, so it can log in with no password |
 | `security.shadow_unreadable` | warning | `/etc/shadow` could not be read, so passwordless accounts are unknown |
-| `security.uid0_account` | critical | An account besides `root` has UID 0 (full root privileges) |
+| `security.uid0_account` | critical | An account besides `root` and standard non-login placeholders (`sync`/`shutdown`/`halt` with their own shell) has UID 0 |
 | `security.passwd_unreadable` | warning | `/etc/passwd` could not be read, so UID 0 accounts are unknown |
 | `auditor.degraded` | warning | Some readers could not run, so the report is incomplete |
 | `tailscale.exposed` | critical | A port is published to the internet with `tailscale funnel`, bypassing the firewall |

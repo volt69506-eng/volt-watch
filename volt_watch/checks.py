@@ -683,13 +683,29 @@ def empty_password_accounts_check(accounts: list | None) -> list:
     ]
 
 
-# The only account allowed to have UID 0. Service placeholders keep their own
-# UIDs; anything else at UID 0 is a second root account.
-UID0_ALLOWLIST = {"root"}
+# `root` is the only account that should have UID 0. A few distributions also
+# ship `sync`/`shutdown`/`halt` with UID 0 as non-login placeholders. Those are
+# allowed only when their shell is the matching utility and their home is a
+# system directory; a UID 0 account named "sync" with a login shell is still a
+# second root account.
+UID0_ROOT = "root"
+UID0_PLACEHOLDERS = {"sync", "shutdown", "halt"}
+UID0_PLACEHOLDER_HOMES = {"/", "/bin", "/sbin", "/usr/sbin"}
+
+
+def _is_allowed_uid0(account: dict) -> bool:
+    name = account.get("name", "")
+    if name == UID0_ROOT:
+        return True
+    if name not in UID0_PLACEHOLDERS:
+        return False
+    shell = account.get("shell") or ""
+    home = account.get("home") or ""
+    return os.path.basename(shell) == name and home in UID0_PLACEHOLDER_HOMES
 
 
 def uid0_accounts_check(accounts: list | None) -> list:
-    """Report every account with UID 0 besides ``root``.
+    """Report every account with UID 0 that is not root or a system placeholder.
 
     ``accounts`` comes from :func:`collector.uid0_accounts`. ``None`` means the
     database existed but could not be read: that is a coverage warning, not a
@@ -710,7 +726,7 @@ def uid0_accounts_check(accounts: list | None) -> list:
     findings = []
     for account in accounts:
         name = account.get("name", "")
-        if name in UID0_ALLOWLIST:
+        if _is_allowed_uid0(account):
             continue
         findings.append(Finding(
             check="security.uid0_account",
