@@ -66,7 +66,15 @@ def _parse_args(argv):
     parser.add_argument(
         "--json",
         action="store_true",
-        help="print the findings as JSON instead of plain text",
+        help="print the findings as JSON instead of plain text (alias for --format json)",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("text", "json", "ndjson"),
+        help=(
+            "output format: text (default), a single JSON document, or NDJSON "
+            "with a meta line followed by one line per finding"
+        ),
     )
     parser.add_argument(
         "--quiet",
@@ -174,6 +182,20 @@ def _report(findings):
     print(f"{len(findings)} finding(s)")
 
 
+def _print_ndjson(payload: dict) -> None:
+    """One JSON object per line: a meta record, then each finding in order.
+
+    The meta record carries everything except the findings themselves, so a
+    consumer can start with `head -1` for version/coverage/counts and stream
+    the rest without loading the whole report.
+    """
+    meta = {key: value for key, value in payload.items() if key != "findings"}
+    meta["record"] = "meta"
+    print(json.dumps(meta, separators=(",", ":")))
+    for finding in payload["findings"]:
+        print(json.dumps(finding, separators=(",", ":")))
+
+
 def _at_or_above(findings, threshold: str) -> bool:
     """Whether any finding is at least as severe as ``threshold``."""
     limit = _SEVERITY_RANK[threshold]
@@ -210,10 +232,13 @@ def main(argv=None, findings=None) -> int:
             raise
         return 2
 
+    fmt = args.format or "text"
+    machine_readable = bool(args.json) or fmt in ("json", "ndjson")
+
     if args.check and not any(p.startswith(args.check) for p in check_prefixes()):
         available = ", ".join(check_prefixes())
         message = f"unknown check prefix {args.check!r}; available: {available}"
-        if args.json:
+        if machine_readable:
             payload = _payload([], {"readers": 0, "degraded": []})
             print(json.dumps({**payload, "error": message}, indent=2))
         elif not args.quiet:
@@ -259,13 +284,15 @@ def main(argv=None, findings=None) -> int:
             Path(args.output).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         except OSError as exc:
             message = f"could not write {args.output!r}: {exc}"
-            if args.json:
+            if machine_readable:
                 print(json.dumps({**payload, "error": message}, indent=2))
             else:
                 print(f"volt-watch: error: {message}", file=sys.stderr)
             return 2
 
-    if args.json:
+    if fmt == "ndjson":
+        _print_ndjson(payload)
+    elif machine_readable:
         print(json.dumps(payload, indent=2))
     elif not args.quiet:
         _report(findings)

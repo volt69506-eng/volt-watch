@@ -102,6 +102,28 @@ readable: `--since` compares findings only, so new provenance fields cannot
 change the exit code against an older report. A v1 report copied as a baseline
 still works exactly as before.
 
+## Automation
+
+Both machine-readable formats are stable enough to build on. `--format json`
+prints one document, identical to `--json`; `--format ndjson` prints a meta
+line (`version`, `generated_at`, `host`, `coverage`, `counts`) followed by one
+line per finding. Neither contains ANSI codes.
+
+```console
+# list the checks that need attention
+$ volt-watch --format json | jq -r '.findings[] | "\(.severity) \(.check)"'
+
+# fail CI only on critical findings, keeping the human report for the log
+$ volt-watch --fail-on critical; echo $?
+
+# stream findings one at a time (meta first)
+$ volt-watch --format ndjson | while IFS= read -r line; do echo "$line" | jq -c .; done
+```
+
+`--output` always writes the JSON baseline (never NDJSON), so it can be fed
+back to `--since` regardless of the display format. Exit codes are described
+above; a degraded audit exits 1 even with `--fail-on critical`.
+
 ## Checks
 
 | Check | Severity | Meaning |

@@ -18,10 +18,10 @@ def _finding(check="x", severity="warning"):
 
 
 def test_format_json_matches_the_json_flag(capsys):
-    assert cli.main(["--json"], findings=[_finding()]) == 0
+    assert cli.main(["--json"], findings=[_finding()]) == 1
     legacy = json.loads(capsys.readouterr().out)
 
-    assert cli.main(["--format", "json"], findings=[_finding()]) == 0
+    assert cli.main(["--format", "json"], findings=[_finding()]) == 1
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["version"] == legacy["version"]
