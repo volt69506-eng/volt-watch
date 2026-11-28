@@ -307,3 +307,53 @@ def test_ssh_authorized_keys_and_dir_safe_permissions_clean(tmp_path, monkeypatc
     records = collector.sensitive_path_records()
     assert len(records) == 2
     assert sensitive_path_permissions_check(records) == []
+
+
+def test_root_owned_0600_luks_keyfile_is_safe():
+    # Observed on the real host: 0600 root:root. Safe, stricter than needed
+    # for group/other access; requiring exactly 0400 was a false positive.
+    rec = {
+        "path": "/crypto_keyfile.bin",
+        "exists": True,
+        "mode": "0o600",
+        "uid": 0,
+        "gid": 0,
+        "owner": "root",
+        "group": "root",
+        "readable": True,
+        "expected": "0400 root-owned",
+    }
+    assert sensitive_path_permissions_check([rec]) == []
+
+
+def test_docker_sock_0660_root_docker_is_safe():
+    # The documented safe mode: the docker group needs group write to connect.
+    rec = {
+        "path": "/run/docker.sock",
+        "exists": True,
+        "mode": "0o660",
+        "uid": 0,
+        "gid": 968,
+        "owner": "root",
+        "group": "docker",
+        "readable": True,
+        "expected": "root:docker 0660 or stricter",
+    }
+    assert sensitive_path_permissions_check([rec]) == []
+
+
+def test_docker_sock_group_readable_without_write_is_a_warning():
+    rec = {
+        "path": "/run/docker.sock",
+        "exists": True,
+        "mode": "0o640",
+        "uid": 0,
+        "gid": 968,
+        "owner": "root",
+        "group": "docker",
+        "readable": True,
+        "expected": "root:docker 0660 or stricter",
+    }
+    findings = sensitive_path_permissions_check([rec])
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.WARNING
