@@ -1320,3 +1320,20 @@ def sensitive_runtime_world_writable_check(records: list[dict] | None, errors: l
             evidence={"path": err.get("path", ""), "error": err.get("error", "")},
         ))
     return findings
+
+
+def ssh_host_key_algorithms_check(records: list[dict] | None) -> list[Finding]:
+    """Warn on DSA and RSA below 2048 bits; unavailable readers report degraded separately."""
+    findings = []
+    for record in records or []:
+        algorithm, bits = record["algorithm"], record["bits"]
+        if algorithm != "DSA" and not (algorithm == "RSA" and bits < 2048):
+            continue
+        findings.append(Finding(
+            check="security.ssh_host_key_weak_algorithm",
+            severity=Severity.WARNING,
+            message=f"Weak SSH host key: {record['path']} ({algorithm}, {bits} bits)",
+            remedy="Plan a rotation to Ed25519 or RSA of at least 2048 bits; distribute trusted new host keys before retiring old ones.",
+            evidence={"path": record["path"], "algorithm": algorithm, "bits": bits},
+        ))
+    return findings

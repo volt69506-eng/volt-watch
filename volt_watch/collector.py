@@ -6,6 +6,9 @@ answer, not an exception: the auditor runs on hosts where Tailscale or the
 Mac-specific register does not exist.
 """
 
+import base64
+import binascii
+import fnmatch
 import glob
 import json
 import os
@@ -50,6 +53,17 @@ SENSITIVE_PATH_SPECS = [
     {"path": "~/.ssh/authorized_keys", "kind": "ssh_authorized_keys"},
     {"path": "~/.ssh", "kind": "ssh_dir"},
 ]
+
+# Public host keys only: never expand the existing private-key permission glob.
+SSH_HOST_KEY_DIR = Path("/etc/ssh")
+MAX_SSH_HOST_KEYS = 8
+MAX_SSH_KEY_DIRECTORY_ENTRIES = 128
+MAX_SSH_PUBLIC_KEY_BYTES = 16 * 1024
+_SSH_PUBLIC_TYPES = {
+    b"ssh-rsa", b"ssh-dss", b"ssh-ed25519",
+    b"ecdsa-sha2-nistp256", b"ecdsa-sha2-nistp384", b"ecdsa-sha2-nistp521",
+    b"sk-ssh-ed25519@openssh.com", b"sk-ecdsa-sha2-nistp256@openssh.com",
+}
 
 SUDOERS_PATH = "/etc/sudoers"
 SUDOERS_D_GLOB = "/etc/sudoers.d/*"
@@ -938,6 +952,118 @@ def world_writable_etc(root: str = "/etc", max_depth: int = MAX_WORLD_WRITABLE_D
         return None
     found.sort(key=lambda item: item["path"])
     return found
+
+
+def _ssh_public_key(path: Path) -> tuple[bytes, bytes | None] | None:
+    """Check a bounded regular public file before ssh-keygen can try private-key parsing."""
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_SSH_PUBLIC_KEY_BYTES:
+        return None
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    # Unbuffered readline stops at a private-key header, without buffering its body.
+    with os.fdopen(fd, "rb", buffering=0) as source:
+        current = os.fstat(source.fileno())
+        if ((current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
+                or not stat.S_ISREG(current.st_mode)
+                or not 0 < current.st_size <= MAX_SSH_PUBLIC_KEY_BYTES):
+            return None
+        prefix = source.readline(80).split(None, 1)
+        if not prefix or prefix[0] not in _SSH_PUBLIC_TYPES:
+            return None
+        if prefix[0] == b"ssh-dss":
+            source.seek(0)
+            return prefix[0], source.readline(MAX_SSH_PUBLIC_KEY_BYTES + 1)
+        return prefix[0], None
+
+
+def _dsa_public_bits(line: bytes) -> int | None:
+    """Read DSA's public p size when modern OpenSSH no longer recognises DSA.
+
+    RFC 4253 section 6.6: a type string and four public mpints p, q, g, y.
+    No private parameters are read or reconstructed.
+    """
+    fields = line.split()
+    if len(line) > MAX_SSH_PUBLIC_KEY_BYTES or len(fields) < 2 or fields[0] != b"ssh-dss":
+        return None
+    try:
+        blob = base64.b64decode(fields[1], validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    offset = 0
+    parts = []
+    for _ in range(5):
+        if offset + 4 > len(blob):
+            return None
+        length = int.from_bytes(blob[offset:offset + 4], "big")
+        offset += 4
+        if offset + length > len(blob):
+            return None
+        parts.append(blob[offset:offset + length])
+        offset += length
+    if offset != len(blob) or parts[0] != b"ssh-dss":
+        return None
+    numbers = [int.from_bytes(part, "big", signed=True) for part in parts[1:]]
+    if any(number <= 0 for number in numbers):
+        return None
+    return numbers[0].bit_length()
+
+
+def ssh_host_key_algorithms() -> list[dict] | None:
+    """Return public path/algorithm/bits only, with unavailable inputs recorded as degraded.
+
+    The nonrecursive scan inspects at most 128 directory entries and 8 public files,
+    each at most 16 KiB. Symlinks, nonregular files and non-public headers are unknown.
+    Earlier successful metadata survives a later failure; no raw output is retained.
+    """
+    reader = "ssh_host_key_algorithms"
+    paths = []
+    try:
+        with os.scandir(SSH_HOST_KEY_DIR) as entries:
+            for index, entry in enumerate(entries):
+                if index >= MAX_SSH_KEY_DIRECTORY_ENTRIES:
+                    _record_error(reader, "public key directory scan limit reached", "unknown")
+                    break
+                if fnmatch.fnmatchcase(entry.name, "ssh_host_*_key.pub"):
+                    if len(paths) >= MAX_SSH_HOST_KEYS:
+                        _record_error(reader, "public host key limit reached", "unknown")
+                        break
+                    paths.append(Path(entry.path))
+    except OSError:
+        _record_error(reader, "public key directory unavailable", "unknown")
+        return None
+    if not paths:
+        _record_error(reader, "no public SSH host keys found", "unknown")
+        return None
+    records = []
+    for path in sorted(paths):  # The list is bounded before sorting.
+        try:
+            public = _ssh_public_key(path)
+        except OSError:
+            public = None
+        if public is None:
+            _record_error(reader, "public host key unavailable or unrecognised", "unknown")
+            continue
+        try:
+            done = _run(["ssh-keygen", "-l", "-f", str(path)], reader)
+        except (OSError, subprocess.SubprocessError):
+            return records or None
+        if done.returncode != 0:
+            # OpenSSH 10 removed DSA support. The bounded public blob still identifies it.
+            bits = _dsa_public_bits(public[1]) if public[1] is not None else None
+            if bits is not None:
+                records.append({"path": str(path), "algorithm": "DSA", "bits": bits})
+                continue
+            _record_error(reader, "could not inspect public host key metadata", "command_failed")
+            continue
+        lines = done.stdout.strip().splitlines()
+        match = None
+        if len(lines) == 1 and len(lines[0]) <= MAX_SSH_PUBLIC_KEY_BYTES * 2:
+            match = re.fullmatch(r"([1-9][0-9]{0,5})\s+\S+\s+.*\((RSA|DSA|ED25519|ECDSA|ED25519-SK|ECDSA-SK)\)", lines[0])
+        if match is None:
+            _record_error(reader, "public host key metadata unrecognised", "unknown")
+            continue
+        records.append({"path": str(path), "algorithm": match[2], "bits": int(match[1])})
+    return records or None
 
 
 def _sensitive_expected(kind: str) -> str:

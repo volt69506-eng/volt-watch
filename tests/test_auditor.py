@@ -23,6 +23,7 @@ _READER_DEFAULTS = {
     "world_writable_etc": list,
     "sensitive_path_records": list,
     "passwordless_sudo_rules": list,
+    "ssh_host_key_algorithms": list,
     "listening_ports": list,
     "sensitive_runtime_world_writable": lambda: ([], []),
 }
