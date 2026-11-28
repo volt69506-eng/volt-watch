@@ -963,8 +963,10 @@ def _sensitive_violation(record: dict) -> tuple[Severity, str] | None:
     group_writable = bool(mode & 0o020)
 
     if kind == "luks_keyfile":
-        if mode != 0o400 or uid != 0:
-            return Severity.CRITICAL, "LUKS keyfile must be 0400 and root-owned"
+        # 0400 and 0600 root-owned are both safe: neither grants group or
+        # other access. 0600 is what this host actually uses.
+        if mode not in (0o400, 0o600) or uid != 0:
+            return Severity.CRITICAL, "LUKS keyfile must be 0400 or 0600 and root-owned"
         return None
     if kind == "ssh_host_private_key":
         if mode & 0o077 or uid != 0:
@@ -993,11 +995,15 @@ def _sensitive_violation(record: dict) -> tuple[Severity, str] | None:
             return Severity.WARNING, "Container registry credential should be 0600"
         return None
     if kind == "docker_sock":
-        if world_readable or world_writable or group_writable or mode & 0o001:
-            return Severity.CRITICAL, "Docker socket must not be world-accessible or group-writable"
-        if mode != 0o660 and (group_readable or group_writable):
-            return Severity.WARNING, "Docker socket should be 0660 root:docker or stricter"
-        return None
+        # 0660 root:docker is the documented safe mode: the docker group needs
+        # group-write to connect. Group-writable is not itself a defect here.
+        if mode & 0o007 or mode & 0o111:
+            return Severity.CRITICAL, "Docker socket must not be world-accessible or executable"
+        if mode == 0o600 or (
+            mode == 0o660 and uid == 0 and record.get("group") in ("docker", "root")
+        ):
+            return None
+        return Severity.WARNING, "Docker socket should be 0660 root:docker or 0600 root-only"
     if kind == "tailscale_state":
         if world_readable or world_writable:
             return Severity.CRITICAL, "Tailscale state must not be world-readable"
