@@ -927,6 +927,10 @@ def _infer_sensitive_kind(record: dict) -> str:
         return "ssh_host_private_key"
     if "/.ssh/id_" in path and not path.endswith(".pub"):
         return "ssh_user_private_key"
+    if path.endswith("/.ssh/authorized_keys"):
+        return "ssh_authorized_keys"
+    if path.endswith("/.ssh"):
+        return "ssh_dir"
     if path.endswith("/docker.sock"):
         return "docker_sock"
     if path.endswith("tailscaled.state"):
@@ -969,6 +973,16 @@ def _sensitive_violation(record: dict) -> tuple[Severity, str] | None:
     if kind == "ssh_user_private_key":
         if mode & 0o077:
             return Severity.CRITICAL, "SSH user private key must be 0600"
+        return None
+    if kind == "ssh_authorized_keys":
+        if mode & 0o022:
+            return Severity.CRITICAL, "SSH authorized_keys must not be group- or world-writable"
+        if mode & 0o044:
+            return Severity.INFO, "SSH authorized_keys is readable by group or others"
+        return None
+    if kind == "ssh_dir":
+        if mode & 0o022:
+            return Severity.CRITICAL, "SSH directory must not be group- or world-writable"
         return None
     if kind == "cloud_credential":
         if mode & 0o077:
@@ -1021,7 +1035,12 @@ def sensitive_path_permissions_check(records: list[dict] | None) -> list:
 
     findings = []
     if bad:
-        severity = Severity.CRITICAL if any(s is Severity.CRITICAL for s, _, _ in bad) else Severity.WARNING
+        if any(s is Severity.CRITICAL for s, _, _ in bad):
+            severity = Severity.CRITICAL
+        elif any(s is Severity.WARNING for s, _, _ in bad):
+            severity = Severity.WARNING
+        else:
+            severity = Severity.INFO
         evidence_paths = [{
             "path": r.get("path"),
             "mode": r.get("mode"),
